@@ -1,0 +1,4 @@
+project_id = "xpgahobznkvsgbjktpve"
+
+[functions.market-positioning]
+verify_jwt = false

@@ -1,0 +1,1181 @@
+import { corsHeaders } from "../_shared/cors.ts";
+import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { verifyHmacSignature, generateSignalHash } from "../_shared/hmac.ts";
+import { parseTradingViewPayload } from "../_shared/tradingview-parser.ts";
+import { parseIndicatorPayload, detectIndicatorSource } from "../_shared/indicator-parsers/index.ts";
+import { evaluateSignalWithMarketData, type EnhancedDecision } from "../_shared/enhanced-decision-engine.ts";
+import { createAdapter, getAdapterInfo } from "../_shared/adapter-factory.ts";
+import { generateOccSymbol } from "../_shared/types.ts";
+import { 
+  evaluateMtfAlignment, 
+  parseMtfSettingsFromRiskLimits,
+  type MtfFilterResult,
+} from "../_shared/mtf-filter.ts";
+// New enhanced filters
+import { evaluateConfluence, type ConfluenceResult, type SignalSource } from "../_shared/confluence-engine.ts";
+import { applyMarketFilters, type MarketFilterResult, getCurrentMarketSession } from "../_shared/market-filters.ts";
+import { calculateDynamicThreshold, meetsThreshold, getPositionMultiplier, type DynamicThresholdResult } from "../_shared/dynamic-thresholds.ts";
+import { applyTimeFilters, type TimeFilterResult } from "../_shared/time-filters.ts";
+// Pre-market signal queueing
+import { shouldQueueSignal, queueSignal, getQueuedSignals, processQueuedSignals } from "../_shared/signal-queue.ts";
+// Market context handling
+import { saveContext } from "../_shared/market-context-service.ts";
+import type { ContextWebhookPayload } from "../_shared/market-context-types.ts";
+// Position cooldown to prevent rapid successive trades
+import { checkPositionCooldown, type CooldownResult } from "../_shared/position-cooldown.ts";
+// GEX signals integration
+import { evaluateEntry, type GEXSignalBundle, type EntryDecision } from "../_shared/gex-signals/index.ts";
+import type { 
+  IncomingSignal, 
+  OrderRequest,
+  TradingMode 
+} from "../_shared/types.ts";
+
+Deno.serve(async (req) => {
+  // Handle CORS
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  if (req.method !== "POST") {
+    return new Response(
+      JSON.stringify({ error: "Method not allowed" }),
+      { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  const correlationId = crypto.randomUUID();
+  const startTime = Date.now();
+  const supabase = createSupabaseClient();
+
+  try {
+    // Get raw body for signature verification
+    const rawBody = await req.text();
+    const signature = req.headers.get("x-signature") || "";
+    const webhookSecret = Deno.env.get("WEBHOOK_SECRET");
+
+    if (!webhookSecret) {
+      console.error(`[${correlationId}] WEBHOOK_SECRET not configured`);
+      return new Response(
+        JSON.stringify({ error: "Server configuration error" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Verify HMAC signature (optional for TradingView - they don't support custom headers)
+    // But we still verify if signature is provided
+    const signatureValid = signature 
+      ? await verifyHmacSignature(rawBody, signature, webhookSecret)
+      : false;
+
+    // Parse the raw JSON
+    let rawPayload: unknown;
+    try {
+      rawPayload = JSON.parse(rawBody);
+    } catch {
+      return new Response(
+        JSON.stringify({ error: "Invalid JSON payload" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Detect indicator source and parse with appropriate parser
+    const indicatorSource = detectIndicatorSource(rawPayload as Record<string, unknown>);
+    
+    // === HANDLE CONTEXT WEBHOOKS (market context indicator) ===
+    const payloadObj = rawPayload as Record<string, unknown>;
+    if (payloadObj.type === 'CONTEXT') {
+      console.log(`[${correlationId}] Received CONTEXT webhook for ${payloadObj.ticker}`);
+      
+      try {
+        const contextPayload = rawPayload as ContextWebhookPayload;
+        
+        // Validate required fields
+        if (!contextPayload.ticker || !contextPayload.price) {
+          return new Response(
+            JSON.stringify({ 
+              error: 'Invalid CONTEXT payload',
+              details: 'Missing required fields: ticker or price'
+            }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
+        // Save context to database
+        const result = await saveContext(contextPayload);
+        
+        if (!result) {
+          return new Response(
+            JSON.stringify({ error: 'Failed to save context' }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
+        console.log(`[${correlationId}] Context saved: ${result.id} for ${contextPayload.ticker}`);
+        
+        return new Response(
+          JSON.stringify({
+            success: true,
+            id: result.id,
+            ticker: contextPayload.ticker,
+            event: contextPayload.event,
+            summary: {
+              vix_regime: contextPayload.volatility?.vix_regime,
+              market_bias: contextPayload.market?.market_bias,
+              or_breakout: contextPayload.opening_range?.breakout,
+              candle_pattern: contextPayload.candle?.pattern,
+              significant_change: contextPayload.changes?.significant
+            }
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      } catch (error) {
+        console.error(`[${correlationId}] Error processing CONTEXT webhook:`, error);
+        return new Response(
+          JSON.stringify({ 
+            error: 'Failed to process context',
+            details: error instanceof Error ? error.message : 'Unknown error'
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+    
+    let parsedSignal: IncomingSignal | null = null;
+    let parseErrors: string[] = [];
+    let isTestPing = false;
+    
+    if (indicatorSource === 'tradingview') {
+      // Use generic TradingView parser
+      const tvResult = parseTradingViewPayload(rawPayload);
+      parsedSignal = tvResult.signal;
+      parseErrors = tvResult.errors;
+    } else {
+      // Use indicator-specific parser (Ultimate Option, etc.)
+      const indicatorResult = parseIndicatorPayload(rawPayload, {
+        scoreConfig: {
+          minThreshold: 70,
+          baseQuantity: 1,
+          scalingFactor: 0.05,
+          maxQuantity: 10,
+        }
+      });
+      parsedSignal = indicatorResult.signal;
+      parseErrors = indicatorResult.errors;
+      isTestPing = indicatorResult.isTest;
+    }
+    
+    // Handle TEST/PING signals - acknowledge but don't process
+    if (isTestPing) {
+      console.log(`[${correlationId}] Test ping received from ${indicatorSource}`);
+      return new Response(
+        JSON.stringify({ 
+          status: "OK",
+          message: "Test ping received",
+          source: indicatorSource,
+          correlation_id: correlationId,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Generate signal hash for idempotency (use raw payload to catch exact duplicates)
+    const signalHash = await generateSignalHash(rawPayload as object);
+
+    // Check for duplicate signal
+    const { data: existingSignal } = await supabase
+      .from("signals")
+      .select("id, status")
+      .eq("signal_hash", signalHash)
+      .maybeSingle();
+
+    if (existingSignal) {
+      console.log(`[${correlationId}] Duplicate signal detected: ${existingSignal.id}`);
+      return new Response(
+        JSON.stringify({ 
+          message: "Duplicate signal detected",
+          signal_id: existingSignal.id,
+          status: existingSignal.status
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // If parsing failed, store the signal as rejected but still persist for debugging
+    if (parseErrors.length > 0 || !parsedSignal) {
+      const payload = rawPayload as Record<string, unknown>;
+      const signalData = {
+        source: indicatorSource,
+        signal_hash: signalHash,
+        raw_payload: rawPayload,
+        signature_verified: signatureValid,
+        action: null,
+        underlying: (payload.ticker || payload.symbol || (payload.instrument as Record<string, unknown>)?.ticker || null)?.toString() || null,
+        strike: typeof payload.strike === "number" ? payload.strike : null,
+        expiration: null,
+        option_type: null,
+        quantity: null,
+        strategy_type: null,
+        status: "REJECTED",
+        validation_errors: parseErrors.map(e => ({ error: e })),
+      };
+
+      const { data: signal } = await supabase
+        .from("signals")
+        .insert(signalData)
+        .select()
+        .single();
+
+      console.log(`[${correlationId}] Signal rejected due to parse errors:`, parseErrors);
+
+      return new Response(
+        JSON.stringify({
+          signal_id: signal?.id,
+          status: "REJECTED",
+          validation_errors: parseErrors,
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const payload: IncomingSignal = parsedSignal;
+
+    // Insert valid signal
+    const signalData = {
+      source: payload.source,
+      signal_hash: signalHash,
+      raw_payload: rawPayload,
+      signature_verified: signatureValid,
+      action: payload.action,
+      underlying: payload.underlying,
+      strike: payload.strike,
+      expiration: payload.expiration,
+      option_type: payload.option_type,
+      quantity: payload.quantity,
+      strategy_type: payload.strategy_type || "SINGLE",
+      status: "VALIDATED",
+      validation_errors: null,
+    };
+
+    const { data: signal, error: signalError } = await supabase
+      .from("signals")
+      .insert(signalData)
+      .select()
+      .single();
+
+    if (signalError) {
+      console.error(`[${correlationId}] Failed to insert signal:`, signalError);
+      throw new Error("Failed to persist signal");
+    }
+
+    console.log(`[${correlationId}] Signal validated: ${signal.id}`);
+
+    // Update signal status to PROCESSING
+    await supabase
+      .from("signals")
+      .update({ status: "PROCESSING" })
+      .eq("id", signal.id);
+
+    // Get current mode from adapter info (respects safety gates)
+    const adapterInfo = getAdapterInfo();
+    const mode: TradingMode = adapterInfo.mode;
+    
+    // Fetch risk limits for current mode
+    const { data: riskLimits } = await supabase
+      .from("risk_limits")
+      .select("*")
+      .eq("mode", mode)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    // Fetch open positions
+    const { data: openPositions } = await supabase
+      .from("positions")
+      .select("*")
+      .eq("is_closed", false);
+
+    // Calculate P&L metrics
+    const dailyPnL = 0;
+    const weeklyPnL = 0;
+    const totalPnL = (openPositions || []).reduce((sum, p) => sum + (p.realized_pnl || 0), 0);
+
+    // =========================================================================
+    // POSITION COOLDOWN CHECK - Prevent rapid successive trades on same instrument
+    // =========================================================================
+    console.log(`[${correlationId}] Checking position cooldown for ${payload.underlying} ${payload.strike} ${payload.option_type}...`);
+    
+    const cooldownResult: CooldownResult = await checkPositionCooldown(
+      payload.underlying,
+      payload.strike,
+      payload.expiration,
+      payload.option_type,
+      payload.action,
+      {
+        cooldownSeconds: 180, // 3 minute cooldown between same contract trades
+        blockDuplicatePositions: true, // Don't add to existing positions
+        maxPositionQuantity: 10,
+        allowScaling: false,
+      }
+    );
+
+    if (!cooldownResult.approved) {
+      await supabase
+        .from("signals")
+        .update({ 
+          status: "REJECTED", 
+          processed_at: new Date().toISOString(),
+          validation_errors: [{ 
+            cooldown_rejection: cooldownResult.reason,
+            existing_position: cooldownResult.details.existingPosition,
+            recent_signal: cooldownResult.details.recentSignal,
+            cooldown_remaining_seconds: cooldownResult.details.cooldownRemaining,
+          }]
+        })
+        .eq("id", signal.id);
+
+      // Log as risk violation
+      await supabase.from("risk_violations").insert({
+        signal_id: signal.id,
+        violation_type: "POSITION_COOLDOWN",
+        rule_violated: cooldownResult.reason,
+        current_value: cooldownResult.details.cooldownRemaining ?? 0,
+        limit_value: 180,
+        severity: "HIGH",
+        action_taken: "REJECTED",
+      });
+
+      console.log(`[${correlationId}] Signal rejected by cooldown: ${cooldownResult.reason}`);
+
+      return new Response(
+        JSON.stringify({
+          signal_id: signal.id,
+          status: "REJECTED",
+          reason: cooldownResult.reason,
+          cooldown_details: cooldownResult.details,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`[${correlationId}] Cooldown check passed: ${cooldownResult.reason}`);
+
+    // =========================================================================
+    // MTF ALIGNMENT CHECK - Require multi-timeframe confirmation
+    // =========================================================================
+    const mtfConfig = parseMtfSettingsFromRiskLimits(riskLimits as Record<string, unknown>);
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    
+    console.log(`[${correlationId}] Evaluating MTF alignment for ${payload.underlying} (mode: ${mtfConfig.mode || 'WEIGHTED'})...`);
+    
+    const mtfResult: MtfFilterResult = await evaluateMtfAlignment(
+      payload.underlying,
+      payload.quantity,
+      mtfConfig,
+      supabaseUrl,
+      supabaseKey
+    );
+
+    console.log(`[${correlationId}] MTF result: approved=${mtfResult.approved}, reason=${mtfResult.reason}, score=${mtfResult.alignmentScore.toFixed(1)}%, confluence=${mtfResult.confluenceCount}`);
+
+    // If MTF rejected, update signal and return
+    if (!mtfResult.approved) {
+      await supabase
+        .from("signals")
+        .update({ 
+          status: "REJECTED", 
+          processed_at: new Date().toISOString(),
+          validation_errors: [{ 
+            mtf_rejection: mtfResult.reason,
+            mtf_mode: mtfResult.mode,
+            alignment_score: mtfResult.alignmentScore,
+            confluence_count: mtfResult.confluenceCount,
+            timeframe_bias: mtfResult.timeframeBias,
+          }]
+        })
+        .eq("id", signal.id);
+
+      // Log as risk violation
+      await supabase.from("risk_violations").insert({
+        signal_id: signal.id,
+        violation_type: "MTF_ALIGNMENT",
+        rule_violated: mtfResult.reason,
+        current_value: mtfResult.alignmentScore,
+        limit_value: mtfConfig.weightedMinScore || 50,
+        severity: "HIGH",
+        action_taken: "REJECTED",
+      });
+
+      console.log(`[${correlationId}] Signal rejected by MTF filter: ${mtfResult.reason}`);
+
+      return new Response(
+        JSON.stringify({
+          signal_id: signal.id,
+          status: "REJECTED",
+          reason: mtfResult.reason,
+          mtf_analysis: {
+            mode: mtfResult.mode,
+            alignment_score: mtfResult.alignmentScore,
+            confluence_count: mtfResult.confluenceCount,
+            timeframe_bias: mtfResult.timeframeBias,
+            recommendation: mtfResult.recommendation,
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // =========================================================================
+    // CROSS-SIGNAL CONFLUENCE CHECK - Require multiple sources to agree
+    // =========================================================================
+    console.log(`[${correlationId}] Evaluating cross-signal confluence for ${payload.underlying}...`);
+    
+    const confluenceResult: ConfluenceResult = await evaluateConfluence(
+      payload.underlying,
+      payload,
+      indicatorSource as SignalSource,
+      {
+        minAgreeSources: 2,
+        lookbackMinutes: 15,
+        minWeightedScore: 2.0,
+        requirePrimarySources: false,
+      }
+    );
+
+    console.log(`[${correlationId}] Confluence result: approved=${confluenceResult.approved}, agreeing=${confluenceResult.agreeingSources.length}, conflicting=${confluenceResult.conflictingSources.length}, score=${confluenceResult.weightedScore.toFixed(2)}`);
+
+    // If confluence has hard conflicts, reject immediately
+    if (confluenceResult.conflictingSources.length > confluenceResult.agreeingSources.length) {
+      await supabase
+        .from("signals")
+        .update({ 
+          status: "REJECTED", 
+          processed_at: new Date().toISOString(),
+          validation_errors: [{ 
+            confluence_rejection: confluenceResult.reason,
+            agreeing_sources: confluenceResult.agreeingSources,
+            conflicting_sources: confluenceResult.conflictingSources,
+          }]
+        })
+        .eq("id", signal.id);
+
+      console.log(`[${correlationId}] Signal rejected by confluence check: ${confluenceResult.reason}`);
+
+      return new Response(
+        JSON.stringify({
+          signal_id: signal.id,
+          status: "REJECTED",
+          reason: confluenceResult.reason,
+          confluence_analysis: {
+            agreeing_sources: confluenceResult.agreeingSources,
+            conflicting_sources: confluenceResult.conflictingSources,
+            weighted_score: confluenceResult.weightedScore,
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // =========================================================================
+    // TIME-OF-DAY FILTER - Adjust based on market session
+    // With PRE-MARKET QUEUEING for high-confidence signals
+    // =========================================================================
+    console.log(`[${correlationId}] Applying time-of-day filters...`);
+    
+    const timeResult: TimeFilterResult = applyTimeFilters();
+    const currentSession = getCurrentMarketSession();
+    
+    console.log(`[${correlationId}] Time filter: session=${timeResult.session}, multiplier=${timeResult.positionMultiplier.toFixed(2)}, scoreAdj=${timeResult.scoreAdjustment}`);
+
+    if (!timeResult.approved) {
+      // Get signal confidence score
+      const rawConfidence = payload.metadata?.score ?? payload.metadata?.confidence_score ?? payload.metadata?.confidence ?? 70;
+      const signalConfidence = typeof rawConfidence === 'number' ? rawConfidence : 70;
+      
+      // Check if we should queue this signal instead of rejecting
+      const queueCheck = shouldQueueSignal(
+        payload,
+        indicatorSource,
+        signalConfidence,
+        currentSession
+      );
+      
+      if (queueCheck.shouldQueue) {
+        // Queue the signal for market open execution
+        const queued = queueSignal(payload, indicatorSource, signalConfidence);
+        
+        await supabase
+          .from("signals")
+          .update({ 
+            status: "COMPLETED", // Mark as processed, will execute at open
+            processed_at: new Date().toISOString(),
+            validation_errors: [{ 
+              queued: true,
+              queue_reason: queueCheck.reason,
+              session: currentSession,
+              confidence: signalConfidence,
+            }]
+          })
+          .eq("id", signal.id);
+
+        console.log(`[${correlationId}] Signal queued for market open: ${queueCheck.reason}`);
+
+        return new Response(
+          JSON.stringify({
+            signal_id: signal.id,
+            status: "QUEUED",
+            reason: queueCheck.reason,
+            queue_id: queued.id,
+            execute_at: "Market Open",
+            session: currentSession,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // Not eligible for queueing - reject as before
+      await supabase
+        .from("signals")
+        .update({ 
+          status: "REJECTED", 
+          processed_at: new Date().toISOString(),
+          validation_errors: [{ time_rejection: timeResult.reason }]
+        })
+        .eq("id", signal.id);
+
+      console.log(`[${correlationId}] Signal rejected by time filter: ${timeResult.reason}`);
+
+      return new Response(
+        JSON.stringify({
+          signal_id: signal.id,
+          status: "REJECTED",
+          reason: timeResult.reason,
+          session: timeResult.session,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // =========================================================================
+    // MARKET DATA FILTERS - IV, VIX, liquidity checks
+    // =========================================================================
+    console.log(`[${correlationId}] Applying market data filters...`);
+    
+    const marketResult: MarketFilterResult = await applyMarketFilters(
+      payload.underlying,
+      null, // Will use OCC symbol later
+      payload.expiration,
+      payload.strike,
+      payload.option_type
+    );
+
+    console.log(`[${correlationId}] Market filter: approved=${marketResult.approved}, vix=${marketResult.marketData?.vix?.toFixed(1) || 'N/A'}, iv=${marketResult.marketData?.iv?.toFixed(1) || 'N/A'}%`);
+
+    // Log market filter warnings but don't block (warnings are informational)
+    if (marketResult.warnings.length > 0) {
+      console.log(`[${correlationId}] Market warnings: ${marketResult.warnings.join('; ')}`);
+    }
+
+    // =========================================================================
+    // GEX SIGNAL INTEGRATION - Fetch stored GEX data and evaluate entry
+    // =========================================================================
+    console.log(`[${correlationId}] Fetching GEX signals for ${payload.underlying}...`);
+    
+    // Extract signal score early for GEX evaluation
+    const rawSignalScoreEarly = payload.metadata?.score ?? payload.metadata?.confidence_score ?? payload.metadata?.confidence ?? 70;
+    const signalScoreForGex = typeof rawSignalScoreEarly === 'number' ? rawSignalScoreEarly : 70;
+    
+    let gexEntry: EntryDecision | null = null;
+    let gexSignals: GEXSignalBundle | null = null;
+    
+    // Fetch most recent GEX signals from database
+    const { data: gexData } = await supabase
+      .from("gex_signals")
+      .select("*")
+      .eq("ticker", payload.underlying)
+      .order("calculated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (gexData) {
+      // Reconstruct GEXSignalBundle from database row
+      gexSignals = {
+        ticker: gexData.ticker,
+        expiration: gexData.expiration,
+        currentPrice: gexData.current_price,
+        underlyingPrice: gexData.current_price,
+        calculatedAt: gexData.calculated_at,
+        netGex: gexData.net_gex || 0,
+        dealerPosition: (gexData.dealer_position as GEXSignalBundle['dealerPosition']) || 'NEUTRAL',
+        previousDealerPosition: gexData.previous_dealer_position as GEXSignalBundle['dealerPosition'] || undefined,
+        gexFlip: {
+          detected: gexData.gex_flip_detected || false,
+          direction: gexData.gex_flip_direction as 'LONG_TO_SHORT' | 'SHORT_TO_LONG' | null,
+          implication: '',
+          tradeAction: 'HOLD',
+          conviction: 'LOW',
+          priceVsZeroGamma: 'AT',
+        },
+        zeroGammaBreakout: {
+          zeroGammaLevel: gexData.zero_gamma_level,
+          currentPrice: gexData.current_price,
+          distancePercent: gexData.zero_gamma_level 
+            ? ((gexData.current_price - gexData.zero_gamma_level) / gexData.zero_gamma_level) * 100 
+            : 0,
+          direction: gexData.zero_gamma_level 
+            ? (gexData.current_price > gexData.zero_gamma_level ? 'ABOVE' : 'BELOW') 
+            : 'AT',
+          dealerPosition: (gexData.dealer_position as GEXSignalBundle['dealerPosition']) || 'NEUTRAL',
+          expectedBehavior: '',
+          tradeAction: 'HOLD',
+          conviction: gexData.action_conviction as 'HIGH' | 'MEDIUM' | 'LOW' || 'LOW',
+        },
+        gexWalls: {
+          callWalls: (gexData.call_walls as GEXSignalBundle['gexWalls']['callWalls']) || [],
+          putWalls: (gexData.put_walls as GEXSignalBundle['gexWalls']['putWalls']) || [],
+          nearestCallWall: gexData.nearest_call_wall ? { 
+            strike: gexData.nearest_call_wall, 
+            gexValue: 0, 
+            strength: (gexData.nearest_call_wall_strength as 'MAJOR' | 'MINOR') || 'MINOR',
+            expectedBehavior: '' 
+          } : null,
+          nearestPutWall: gexData.nearest_put_wall ? { 
+            strike: gexData.nearest_put_wall, 
+            gexValue: 0, 
+            strength: (gexData.nearest_put_wall_strength as 'MAJOR' | 'MINOR') || 'MINOR',
+            expectedBehavior: '' 
+          } : null,
+          currentRange: {
+            support: gexData.key_support,
+            resistance: gexData.key_resistance,
+          },
+          priceNearWall: false,
+          wallType: null,
+        },
+        maxPainMagnet: {
+          maxPainStrike: gexData.max_pain_strike || gexData.current_price,
+          currentPrice: gexData.current_price,
+          distancePercent: gexData.max_pain_distance_pct || 0,
+          dte: 7, // Default, will be refined
+          magnetStrength: (gexData.max_pain_magnet_strength as 'STRONG' | 'MODERATE' | 'WEAK' | 'NONE') || 'WEAK',
+          expectedDirection: (gexData.max_pain_expected_direction as 'UP' | 'DOWN' | 'NEUTRAL') || 'NEUTRAL',
+          pinExpected: false,
+          tradeAction: 'HOLD',
+        },
+        pcRatio: {
+          volumeRatio: gexData.pc_volume_ratio || 1,
+          oiRatio: gexData.pc_oi_ratio || 1,
+          combinedRatio: gexData.pc_combined_ratio || 1,
+          sentiment: (gexData.pc_sentiment as GEXSignalBundle['pcRatio']['sentiment']) || 'NEUTRAL',
+          isExtreme: false,
+          contrarianSignal: (gexData.pc_contrarian_signal as 'BUY' | 'SELL' | 'HOLD') || 'HOLD',
+          conviction: (gexData.pc_contrarian_conviction as 'HIGH' | 'MEDIUM' | 'LOW') || 'LOW',
+          reasoning: '',
+        },
+        marketRegime: {
+          regime: (gexData.market_regime as GEXSignalBundle['marketRegime']['regime']) || 'UNKNOWN',
+          confidence: gexData.regime_confidence || 50,
+          primaryDriver: gexData.regime_primary_driver || '',
+          strategy: (gexData.regime_strategy as GEXSignalBundle['marketRegime']['strategy']) || 'HOLD',
+          reasoning: '',
+        },
+        summary: {
+          overallBias: (gexData.overall_bias as 'BULLISH' | 'BEARISH' | 'NEUTRAL') || 'NEUTRAL',
+          biasStrength: (gexData.bias_strength as 'STRONG' | 'MODERATE' | 'WEAK' | 'NONE') || 'WEAK',
+          recommendedAction: (gexData.recommended_action as GEXSignalBundle['summary']['recommendedAction']) || 'HOLD',
+          actionConviction: (gexData.action_conviction as 'HIGH' | 'MEDIUM' | 'LOW') || 'LOW',
+          reasoning: gexData.action_reasoning || '',
+          keyLevels: {
+            support: gexData.key_support,
+            resistance: gexData.key_resistance,
+            zeroGamma: gexData.zero_gamma_level,
+            maxPain: gexData.max_pain_strike || gexData.current_price,
+          },
+        },
+      };
+      
+      // Evaluate entry using GEX signals
+      gexEntry = evaluateEntry({
+        signal: {
+          underlying: payload.underlying,
+          action: payload.action as 'BUY' | 'SELL',
+          optionType: payload.option_type as 'CALL' | 'PUT',
+          quantity: payload.quantity,
+          confidence: signalScoreForGex,
+        },
+        gexSignals,
+        marketContext: marketResult.marketData ? {
+          vix: marketResult.marketData.vix ?? undefined,
+          vixRegime: marketResult.marketData.vix && marketResult.marketData.vix > 25 ? 'HIGH_VOL' : 'NORMAL',
+          marketBias: gexData.overall_bias ?? undefined,
+        } : undefined,
+        mtfTrend: {
+          bias: mtfResult.recommendation ?? undefined,
+          alignmentScore: mtfResult.alignmentScore,
+        },
+        currentPrice: marketResult.marketData?.underlyingPrice ?? gexData.current_price,
+      });
+      
+      console.log(`[${correlationId}] GEX entry: action=${gexEntry.action}, confidence=${gexEntry.confidence.toFixed(0)}%, gexAlign=${gexEntry.gexAlignment}, regimeAlign=${gexEntry.regimeAlignment}`);
+      
+      // If GEX rejects the entry, honor that decision
+      if (gexEntry.action === 'REJECT') {
+        await supabase
+          .from("signals")
+          .update({ 
+            status: "REJECTED", 
+            processed_at: new Date().toISOString(),
+            validation_errors: [{ 
+              gex_rejection: gexEntry.rejectionReason,
+              gex_details: gexEntry.rejectionDetails,
+              confidence_adjustments: gexEntry.confidenceAdjustments,
+            }]
+          })
+          .eq("id", signal.id);
+
+        // Log as risk violation
+        await supabase.from("risk_violations").insert({
+          signal_id: signal.id,
+          violation_type: "GEX_ENTRY",
+          rule_violated: gexEntry.rejectionReason || 'GEX-based rejection',
+          current_value: gexEntry.confidence,
+          limit_value: 35, // BASE_CONFIDENCE_THRESHOLD
+          severity: "HIGH",
+          action_taken: "REJECTED",
+        });
+
+        console.log(`[${correlationId}] Signal rejected by GEX evaluation: ${gexEntry.rejectionReason}`);
+
+        return new Response(
+          JSON.stringify({
+            signal_id: signal.id,
+            status: "REJECTED",
+            reason: gexEntry.rejectionReason,
+            gex_analysis: {
+              confidence: gexEntry.confidence,
+              gex_alignment: gexEntry.gexAlignment,
+              regime_alignment: gexEntry.regimeAlignment,
+              adjustments: gexEntry.confidenceAdjustments,
+            },
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    } else {
+      console.log(`[${correlationId}] No GEX signals available for ${payload.underlying}, continuing without GEX adjustments`);
+    }
+
+    // =========================================================================
+    // DYNAMIC THRESHOLD - Adjust score requirements based on all context
+    // Now includes timeframe-specific adjustments (3m = +10, 15m = -5)
+    // =========================================================================
+    console.log(`[${correlationId}] Calculating dynamic threshold...`);
+    
+    // Extract timeframe from metadata for timeframe-specific threshold adjustments
+    const signalTimeframe = payload.metadata?.timeframe?.toString() || 
+                           payload.metadata?.chart_tf?.toString() || 
+                           undefined;
+    
+    const thresholdResult: DynamicThresholdResult = calculateDynamicThreshold(
+      mtfResult,
+      confluenceResult,
+      marketResult,
+      {}, // Use default config
+      signalTimeframe // Pass timeframe for 3m noise filtering
+    );
+
+    console.log(`[${correlationId}] Dynamic threshold: ${thresholdResult.finalThreshold} (base: ${thresholdResult.baseThreshold}, adj: ${thresholdResult.totalAdjustment > 0 ? '+' : ''}${thresholdResult.totalAdjustment}, tf: ${signalTimeframe || 'unknown'}), recommendation: ${thresholdResult.recommendation}`);
+
+    // Get signal score from metadata
+    const rawSignalScore = payload.metadata?.score ?? payload.metadata?.confidence_score ?? payload.metadata?.confidence ?? 70;
+    const signalScore = typeof rawSignalScore === 'number' ? rawSignalScore : 70;
+    
+    // If recommendation is AVOID, reject
+    if (thresholdResult.recommendation === 'AVOID') {
+      await supabase
+        .from("signals")
+        .update({ 
+          status: "REJECTED", 
+          processed_at: new Date().toISOString(),
+          validation_errors: [{ 
+            threshold_rejection: 'Signal does not meet dynamic threshold requirements',
+            signal_score: signalScore,
+            required_threshold: thresholdResult.finalThreshold,
+            recommendation: thresholdResult.recommendation,
+            adjustments: thresholdResult.adjustments,
+          }]
+        })
+        .eq("id", signal.id);
+
+      console.log(`[${correlationId}] Signal rejected by dynamic threshold: AVOID recommendation`);
+
+      return new Response(
+        JSON.stringify({
+          signal_id: signal.id,
+          status: "REJECTED",
+          reason: `Dynamic threshold: ${thresholdResult.recommendation}`,
+          threshold_analysis: {
+            signal_score: signalScore,
+            required_threshold: thresholdResult.finalThreshold,
+            confidence: thresholdResult.confidence,
+            adjustments: thresholdResult.adjustments,
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // =========================================================================
+    // CALCULATE FINAL POSITION SIZE - Combine all multipliers including GEX
+    // =========================================================================
+    const mtfMultiplier = mtfResult.positionMultiplier;
+    const timeMultiplier = timeResult.positionMultiplier;
+    const thresholdMultiplier = getPositionMultiplier(thresholdResult);
+    const confluenceBoost = 1 + (confluenceResult.confidenceBoost * 0.25); // Up to 25% boost
+    const gexMultiplier = gexEntry?.quantityMultiplier || 1.0; // GEX-based adjustment
+    
+    const combinedMultiplier = mtfMultiplier * timeMultiplier * thresholdMultiplier * confluenceBoost * gexMultiplier;
+    const finalQuantity = Math.max(1, Math.round(payload.quantity * combinedMultiplier));
+    
+    console.log(`[${correlationId}] Position sizing: base=${payload.quantity}, mtf=${mtfMultiplier.toFixed(2)}x, time=${timeMultiplier.toFixed(2)}x, threshold=${thresholdMultiplier.toFixed(2)}x, confluence=${confluenceBoost.toFixed(2)}x, gex=${gexMultiplier.toFixed(2)}x -> final=${finalQuantity}`);
+
+    // Create adjusted signal for decision engine
+    const adjustedSignal: IncomingSignal = {
+      ...payload,
+      quantity: finalQuantity,
+    };
+
+    // Enhanced decision engine evaluation with market data
+    console.log(`[${correlationId}] Evaluating signal with market data...`);
+    const decision: EnhancedDecision = await evaluateSignalWithMarketData({
+      signal: adjustedSignal,
+      riskLimits: riskLimits || {
+        id: "",
+        mode,
+        is_active: true,
+        max_position_size: null,
+        max_position_value: null,
+        max_total_positions: null,
+        max_daily_loss: null,
+        max_weekly_loss: null,
+        max_total_portfolio_loss: null,
+        max_underlying_exposure: null,
+        max_expiration_concentration: null,
+        max_portfolio_delta: null,
+        max_portfolio_gamma: null,
+        max_portfolio_vega: null,
+      },
+      openPositions: openPositions || [],
+      dailyPnL,
+      weeklyPnL,
+      totalPnL,
+    });
+
+    // Log market data if available
+    if (decision.market_data) {
+      console.log(`[${correlationId}] Market data: bid=${decision.market_data.bid}, ask=${decision.market_data.ask}, delta=${decision.market_data.delta}, iv=${decision.market_data.iv}`);
+    }
+    if (decision.order_adjustments) {
+      console.log(`[${correlationId}] Order adjusted: ${decision.order_adjustments.adjustment_reason}`);
+    }
+
+    // Log risk violations if any
+    for (const violation of decision.risk_violations) {
+      await supabase.from("risk_violations").insert({
+        signal_id: signal.id,
+        violation_type: violation.violation_type,
+        rule_violated: violation.rule_violated,
+        current_value: violation.current_value,
+        limit_value: violation.limit_value,
+        severity: violation.severity,
+        action_taken: decision.action === "REJECT" ? "REJECTED" : "WARNING_LOGGED",
+      });
+    }
+
+    // If decision is to reject, update signal and return
+    if (decision.action === "REJECT") {
+      await supabase
+        .from("signals")
+        .update({ 
+          status: "REJECTED", 
+          processed_at: new Date().toISOString(),
+          validation_errors: { 
+            rejection_reason: decision.reason,
+            context_summary: decision.context_summary || null,
+            mtf_summary: decision.mtf_summary || null,
+            adjustments_applied: decision.adjustments_applied || [],
+          }
+        })
+        .eq("id", signal.id);
+
+      console.log(`[${correlationId}] Signal rejected by risk manager: ${decision.reason}`);
+
+      return new Response(
+        JSON.stringify({
+          signal_id: signal.id,
+          status: "REJECTED",
+          reason: decision.reason,
+          risk_violations: decision.risk_violations,
+          context_summary: decision.context_summary,
+          mtf_summary: decision.mtf_summary,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Generate OCC symbol
+    const occSymbol = generateOccSymbol(
+      payload.underlying,
+      payload.expiration,
+      payload.option_type,
+      payload.strike
+    );
+
+    // Create order request
+    const orderRequest: OrderRequest = {
+      signal_id: signal.id,
+      underlying: payload.underlying,
+      symbol: occSymbol,
+      strike: payload.strike,
+      expiration: payload.expiration,
+      option_type: payload.option_type,
+      side: decision.side,
+      quantity: decision.quantity,
+      order_type: decision.order_type,
+      limit_price: decision.price_hint || undefined,
+      time_in_force: payload.time_in_force || "DAY",
+    };
+
+    // Create adapter via factory (respects safety gates)
+    const { adapter, safety_result: adapterSafetyResult, warnings: adapterWarnings } = createAdapter({
+      paper_config: {
+        slippage_percent: 0.1,
+        commission_per_contract: 0.65,
+        fee_per_contract: 0.02,
+      },
+    });
+    
+    // Log adapter selection
+    console.log(`[${correlationId}] Using adapter: ${adapter.name} (mode: ${adapterSafetyResult.mode})`);
+    if (adapterWarnings.length > 0) {
+      console.warn(`[${correlationId}] Adapter warnings:`, adapterWarnings);
+    }
+
+    // Execute order via selected adapter
+    const basePrice = decision.market_data?.mid || payload.limit_price || 1.50;
+    const { result, trade } = await adapter.submitOrder(orderRequest, basePrice);
+
+    // Log adapter interaction
+    await supabase.from("adapter_logs").insert({
+      correlation_id: correlationId,
+      adapter_name: adapter.name,
+      operation: "SUBMIT_ORDER",
+      request_payload: orderRequest,
+      response_payload: result,
+      status: result.success ? "SUCCESS" : "FAILURE",
+      duration_ms: Date.now() - startTime,
+    });
+
+    // Create order record
+    const { data: order, error: orderError } = await supabase
+      .from("orders")
+      .insert({
+        signal_id: signal.id,
+        broker_order_id: result.broker_order_id,
+        client_order_id: `CLT-${signal.id.substring(0, 8)}-${Date.now()}`,
+        underlying: orderRequest.underlying,
+        symbol: orderRequest.symbol,
+        strike: orderRequest.strike,
+        expiration: orderRequest.expiration,
+        option_type: orderRequest.option_type,
+        side: orderRequest.side,
+        quantity: orderRequest.quantity,
+        order_type: orderRequest.order_type,
+        limit_price: orderRequest.limit_price || null,
+        time_in_force: orderRequest.time_in_force,
+        mode,
+        status: result.status,
+        filled_quantity: result.filled_quantity,
+        avg_fill_price: result.avg_fill_price || null,
+        submitted_at: new Date().toISOString(),
+        filled_at: result.status === "FILLED" ? new Date().toISOString() : null,
+      })
+      .select()
+      .single();
+
+    if (orderError) {
+      console.error(`[${correlationId}] Failed to create order:`, orderError);
+    }
+
+    // If filled, create trade record and update position
+    if (result.status === "FILLED" && trade && order) {
+      const { error: tradeError } = await supabase.from("trades").insert({
+        order_id: order.id,
+        broker_trade_id: trade.broker_trade_id,
+        execution_price: trade.execution_price,
+        quantity: trade.quantity,
+        commission: trade.commission,
+        fees: trade.fees,
+        total_cost: trade.total_cost,
+        underlying: trade.underlying,
+        symbol: trade.symbol,
+        strike: trade.strike,
+        expiration: trade.expiration,
+        option_type: trade.option_type,
+        executed_at: trade.executed_at,
+      });
+
+      if (tradeError) {
+        console.error(`[${correlationId}] Failed to create trade:`, tradeError);
+      }
+
+      // Update or create position
+      const { data: existingPosition } = await supabase
+        .from("positions")
+        .select("*")
+        .eq("symbol", occSymbol)
+        .eq("is_closed", false)
+        .maybeSingle();
+
+      const isBuy = orderRequest.side.includes("BUY");
+      const quantityDelta = isBuy ? trade.quantity : -trade.quantity;
+
+      if (existingPosition) {
+        const newQuantity = existingPosition.quantity + quantityDelta;
+        
+        if (newQuantity === 0) {
+          // Position fully closed - calculate realized P&L
+          const entryPrice = existingPosition.avg_open_price;
+          const exitPrice = trade.execution_price;
+          const qty = Math.abs(existingPosition.quantity);
+          const contractMultiplier = 100;
+          const isLong = existingPosition.quantity > 0;
+          
+          // P&L = (exit - entry) × qty × 100 for long, inverse for short
+          const priceDiff = isLong 
+            ? exitPrice - entryPrice 
+            : entryPrice - exitPrice;
+          
+          const realizedPnl = priceDiff * qty * contractMultiplier;
+          
+          console.log(`[${correlationId}] Position closed: entry=${entryPrice}, exit=${exitPrice}, qty=${qty}, isLong=${isLong}, realized_pnl=${realizedPnl.toFixed(2)}`);
+          
+          await supabase
+            .from("positions")
+            .update({ 
+              is_closed: true, 
+              closed_at: new Date().toISOString(),
+              quantity: 0,
+              current_price: exitPrice,
+              realized_pnl: realizedPnl,
+            })
+            .eq("id", existingPosition.id);
+        } else {
+          // Position partially reduced or increased
+          const newTotalCost = existingPosition.total_cost + trade.total_cost;
+          const newAvgPrice = newTotalCost / (Math.abs(newQuantity) * 100);
+          
+          await supabase
+            .from("positions")
+            .update({ 
+              quantity: newQuantity,
+              total_cost: newTotalCost,
+              avg_open_price: newAvgPrice,
+              last_updated: new Date().toISOString(),
+            })
+            .eq("id", existingPosition.id);
+        }
+      } else if (isBuy) {
+        // Capture entry IV for IV crush detection and initialize high water mark
+        const entryIv = decision.market_data?.iv ?? null;
+        
+        await supabase.from("positions").insert({
+          symbol: occSymbol,
+          underlying: trade.underlying,
+          strike: trade.strike,
+          expiration: trade.expiration,
+          option_type: trade.option_type,
+          quantity: trade.quantity,
+          avg_open_price: trade.execution_price,
+          total_cost: trade.total_cost,
+          opened_at: new Date().toISOString(),
+          entry_iv: entryIv,
+          high_water_mark: 0, // Initialize at 0, will be updated by refresh-positions
+        });
+        
+        console.log(`[${correlationId}] Position opened with entry_iv=${entryIv?.toFixed(1) || 'N/A'}%`);
+      }
+    }
+
+    // Update signal as completed with context data
+    await supabase
+      .from("signals")
+      .update({ 
+        status: "COMPLETED", 
+        processed_at: new Date().toISOString(),
+        validation_errors: {
+          context_summary: decision.context_summary || null,
+          mtf_summary: decision.mtf_summary || null,
+          adjustments_applied: decision.adjustments_applied || [],
+        }
+      })
+      .eq("id", signal.id);
+
+    const duration = Date.now() - startTime;
+    console.log(`[${correlationId}] Signal processed successfully in ${duration}ms`);
+
+    return new Response(
+      JSON.stringify({
+        signal_id: signal.id,
+        order_id: order?.id,
+        status: "COMPLETED",
+        execution: {
+          status: result.status,
+          filled_quantity: result.filled_quantity,
+          avg_fill_price: result.avg_fill_price,
+        },
+        mtf_analysis: {
+          mode: mtfResult.mode,
+          approved: mtfResult.approved,
+          alignment_score: mtfResult.alignmentScore,
+          confluence_count: mtfResult.confluenceCount,
+          position_multiplier: mtfResult.positionMultiplier,
+          original_quantity: mtfResult.originalQuantity,
+          adjusted_quantity: mtfResult.adjustedQuantity,
+          timeframe_bias: mtfResult.timeframeBias,
+          recommendation: mtfResult.recommendation,
+        },
+        market_data: decision.market_data ? {
+          bid: decision.market_data.bid,
+          ask: decision.market_data.ask,
+          delta: decision.market_data.delta,
+          iv: decision.market_data.iv,
+          provider: decision.market_data.provider,
+        } : null,
+        order_adjustments: decision.order_adjustments || null,
+        processing_time_ms: duration,
+      }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (error) {
+    console.error(`[${correlationId}] Webhook processing error:`, error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+    await supabase.from("adapter_logs").insert({
+      correlation_id: correlationId,
+      adapter_name: "webhook",
+      operation: "PROCESS_SIGNAL",
+      status: "FAILURE",
+      error_message: errorMessage,
+      duration_ms: Date.now() - startTime,
+    });
+
+    return new Response(
+      JSON.stringify({ 
+        error: "Internal server error", 
+        correlation_id: correlationId 
+      }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+});

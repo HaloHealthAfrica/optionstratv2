@@ -1,0 +1,9 @@
+{
+  "tasks": {
+    "test": "deno test --allow-all"
+  },
+  "imports": {
+    "vitest": "npm:vitest@3.2.4",
+    "fast-check": "npm:fast-check@4.5.3"
+  }
+}

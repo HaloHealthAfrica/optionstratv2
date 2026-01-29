@@ -1,0 +1,189 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Trading Dashboard Design System - Professional dark terminal aesthetic */
+
+@layer base {
+  :root {
+    --background: 220 20% 97%;
+    --foreground: 220 25% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 25% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 25% 10%;
+
+    --primary: 217 91% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 15% 92%;
+    --secondary-foreground: 220 25% 10%;
+
+    --muted: 220 15% 95%;
+    --muted-foreground: 220 10% 45%;
+
+    --accent: 220 15% 92%;
+    --accent-foreground: 220 25% 10%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 88%;
+    --input: 220 15% 88%;
+    --ring: 217 91% 55%;
+
+    --radius: 0.5rem;
+
+    /* Trading-specific colors */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 0%;
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+    
+    /* Mode indicators */
+    --paper-mode: 262 83% 58%;
+    --live-mode: 0 72% 51%;
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 222 30% 6%;
+    --foreground: 210 40% 95%;
+
+    --card: 222 25% 9%;
+    --card-foreground: 210 40% 95%;
+
+    --popover: 222 25% 9%;
+    --popover-foreground: 210 40% 95%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 30% 6%;
+
+    --secondary: 222 20% 14%;
+    --secondary-foreground: 210 40% 95%;
+
+    --muted: 222 20% 14%;
+    --muted-foreground: 215 20% 55%;
+
+    --accent: 222 20% 14%;
+    --accent-foreground: 210 40% 95%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 222 20% 16%;
+    --input: 222 20% 16%;
+    --ring: 217 91% 60%;
+
+    /* Trading-specific colors - dark mode */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 0%;
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+    
+    /* Mode indicators */
+    --paper-mode: 262 83% 58%;
+    --live-mode: 0 72% 51%;
+
+    --sidebar-background: 222 30% 5%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 20% 12%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 222 20% 14%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer utilities {
+  .text-success {
+    color: hsl(var(--success));
+  }
+  
+  .text-warning {
+    color: hsl(var(--warning));
+  }
+  
+  .bg-success {
+    background-color: hsl(var(--success));
+  }
+  
+  .bg-warning {
+    background-color: hsl(var(--warning));
+  }
+  
+  .bg-paper-mode {
+    background-color: hsl(var(--paper-mode));
+  }
+  
+  .bg-live-mode {
+    background-color: hsl(var(--live-mode));
+  }
+  
+  .text-paper-mode {
+    color: hsl(var(--paper-mode));
+  }
+  
+  .text-live-mode {
+    color: hsl(var(--live-mode));
+  }
+
+  /* Monospace for trading data */
+  .font-mono-trading {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Scrollbar styling */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 3px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.5);
+  }
+}
