@@ -44,6 +44,7 @@ export class DecisionOrchestrator {
     allSignals: Signal[] = []
   ): Promise<EntryDecision> {
     const reasoning: string[] = [];
+    let gexSignal: GEXSignal | null = null;
     
     try {
       // Step 1: Fetch context data with timeout (Requirement 8.1)
@@ -74,7 +75,6 @@ export class DecisionOrchestrator {
 
       // Step 3: Fetch GEX signal with graceful degradation (Requirement 19.1)
       reasoning.push('Fetching GEX signal...');
-      let gexSignal = null;
       let gexAdjustment = 0;
       
       try {
@@ -399,11 +399,7 @@ export class DecisionOrchestrator {
     reasoning: string[]
   ): ExitDecision {
     const currentPrice = position.currentPrice || position.entryPrice;
-    const unrealizedPnL = this.positionManager.calculateUnrealizedPnL(
-      position.entryPrice,
-      currentPrice,
-      position.quantity
-    );
+    const unrealizedPnL = this.positionManager.calculateUnrealizedPnL(position, currentPrice);
     const pnlPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
 
     return {

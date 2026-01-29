@@ -216,20 +216,7 @@ async function processSignalAsync(rawPayload: any, correlationId: string): Promi
         position_size: result.decision?.positionSize,
       });
       
-      // Store successful decision in database
-      if (result.decision && result.signal) {
-        await supabase.from('refactored_decisions').insert({
-          id: crypto.randomUUID(),
-          signal_id: result.trackingId,
-          decision_type: 'ENTRY',
-          decision: result.decision.decision,
-          confidence: result.decision.confidence,
-          position_size: result.decision.positionSize,
-          reasoning: result.decision.reasoning,
-          calculations: result.decision.calculations,
-          created_at: new Date().toISOString(),
-        });
-      }
+      // Decision persistence handled via AuditLogger
     } else {
       console.log(`[${correlationId}] Signal processing failed:`, {
         tracking_id: result.trackingId,

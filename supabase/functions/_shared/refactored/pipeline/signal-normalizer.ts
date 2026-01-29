@@ -110,7 +110,10 @@ export class SignalNormalizer {
    * Normalize symbol (uppercase, trim whitespace)
    */
   private normalizeSymbol(symbol: string): string {
-    return symbol.toUpperCase().trim();
+    const upper = symbol.toUpperCase().trim();
+    const withoutExchange = upper.includes(':') ? upper.split(':').pop()! : upper;
+    const withoutSuffix = withoutExchange.includes('.') ? withoutExchange.split('.')[0] : withoutExchange;
+    return withoutSuffix.trim();
   }
 
   /**

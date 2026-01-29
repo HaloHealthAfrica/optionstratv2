@@ -5,6 +5,8 @@ import { createMarketdataClient } from "../_shared/market-data/marketdata-client
 
 // Tickers to track
 const TRACKED_TICKERS = ['SPY', 'QQQ', 'IWM'];
+const REFACTORED_TIMEFRAME = '15m';
+const GEX_STRENGTH_NORMALIZER = 1_000_000_000;
 
 // Cron job: Refresh GEX signals for tracked tickers
 // Schedule: every 15 min during market hours (9-16 EST, Mon-Fri)
@@ -84,7 +86,7 @@ Deno.serve(async (req) => {
           context?.vix
         );
 
-        // Store signals
+        // Store legacy signals (full schema)
         const { error: insertError } = await supabase.from('gex_signals').insert({
           ticker: tkr,
           expiration,
@@ -127,6 +129,41 @@ Deno.serve(async (req) => {
         if (insertError) {
           console.error(`[RefreshGEX] Failed to store signals for ${tkr}:`, insertError);
           results.push({ ticker: tkr, success: false, error: insertError.message });
+          continue;
+        }
+
+        // Store refactored signal summary for DecisionOrchestrator
+        const refactoredDirection = signals.netGex >= 0 ? 'CALL' : 'PUT';
+        const refactoredStrength = Math.min(
+          1,
+          Math.abs(signals.netGex) / GEX_STRENGTH_NORMALIZER
+        );
+
+        const { error: refactoredError } = await supabase
+          .from('refactored_gex_signals')
+          .insert({
+            id: crypto.randomUUID(),
+            symbol: tkr,
+            timeframe: REFACTORED_TIMEFRAME,
+            strength: refactoredStrength,
+            direction: refactoredDirection,
+            timestamp: new Date().toISOString(),
+            age: 0,
+            metadata: {
+              source: 'refresh-gex-signals',
+              expiration,
+              net_gex: signals.netGex,
+              dealer_position: signals.dealerPosition,
+              zero_gamma_level: signals.zeroGammaBreakout.zeroGammaLevel,
+              gex_flip_detected: signals.gexFlip.detected,
+              market_regime: signals.marketRegime.regime,
+              summary_bias: signals.summary.overallBias,
+            },
+          });
+
+        if (refactoredError) {
+          console.error(`[RefreshGEX] Failed to store refactored signal for ${tkr}:`, refactoredError);
+          results.push({ ticker: tkr, success: false, error: refactoredError.message });
           continue;
         }
 

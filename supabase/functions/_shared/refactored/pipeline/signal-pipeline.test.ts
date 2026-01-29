@@ -217,6 +217,51 @@ describe('Signal Pipeline Property Tests', () => {
     );
   });
 
+  it('normalizes TradingView symbols before decision orchestration', async () => {
+    const orchestrateSpy = vi.fn().mockResolvedValue({
+      decision: 'ENTER',
+      signal: {} as Signal,
+      confidence: 75,
+      positionSize: 2,
+      reasoning: ['All checks passed'],
+      calculations: {
+        baseConfidence: 70,
+        contextAdjustment: 5,
+        positioningAdjustment: 0,
+        gexAdjustment: 0,
+        finalConfidence: 75,
+        baseSizing: 2,
+        kellyMultiplier: 1,
+        regimeMultiplier: 1,
+        confluenceMultiplier: 1,
+        finalSize: 2,
+      },
+    });
+
+    mockOrchestrator.orchestrateEntryDecision = orchestrateSpy;
+
+    const rawSignal = {
+      source: 'TRADINGVIEW',
+      symbol: 'NASDAQ:SPY',
+      direction: 'BUY',
+      timeframe: '5m',
+      price: 450,
+    };
+
+    const result = await pipeline.processSignal(rawSignal);
+
+    expect(result.success).toBe(true);
+    expect(orchestrateSpy).toHaveBeenCalledTimes(1);
+    expect(orchestrateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbol: 'SPY',
+        direction: 'CALL',
+        timeframe: '5m',
+      }),
+      expect.any(Array)
+    );
+  });
+
   /**
    * Property 37: Individual Signal Failure Isolation
    * For any signal that fails during processing, the System SHALL continue

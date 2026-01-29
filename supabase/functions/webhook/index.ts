@@ -175,18 +175,20 @@ Deno.serve(async (req) => {
     const signature = req.headers.get("x-signature") || "";
     const webhookSecret = Deno.env.get("WEBHOOK_SECRET");
 
-    if (!webhookSecret) {
-      console.error(`[${correlationId}] WEBHOOK_SECRET not configured`);
-      return new Response(
-        JSON.stringify({ error: "Server configuration error" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    // Verify HMAC signature when configured
+    let signatureValid: boolean | null = null;
+    if (webhookSecret) {
+      signatureValid = signature
+        ? await verifyHmacSignature(rawBody, signature, webhookSecret)
+        : false;
 
-    // Verify HMAC signature (optional for TradingView)
-    const signatureValid = signature 
-      ? await verifyHmacSignature(rawBody, signature, webhookSecret)
-      : false;
+      if (!signatureValid) {
+        return new Response(
+          JSON.stringify({ error: "Invalid signature" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
 
     // Parse JSON payload
     let rawPayload: unknown;
@@ -316,7 +318,7 @@ Deno.serve(async (req) => {
 async function processSignalAsync(
   rawPayload: any,
   correlationId: string,
-  signatureValid: boolean
+  signatureValid: boolean | null
 ): Promise<void> {
   const supabase = createSupabaseClient();
   const decisionStartTime = Date.now();
