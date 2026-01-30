@@ -149,6 +149,11 @@ function initializePipeline(): {
   return { pipeline, auditLogger, metricsService, degradedModeTracker };
 }
 
+// Allow running standalone (Supabase edge / local dev)
+if (import.meta.main) {
+  Deno.serve(handleWebhook);
+}
+
 // Initialize pipeline once at module load
 const { pipeline, auditLogger, metricsService, degradedModeTracker } = initializePipeline();
 
@@ -290,7 +295,7 @@ function buildPipelinePayload(
 /**
  * Main webhook handler
  */
-Deno.serve(async (req) => {
+export default async function handleWebhook(req: Request): Promise<Response> {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -307,29 +312,43 @@ Deno.serve(async (req) => {
   const correlationId = crypto.randomUUID();
   const startTime = Date.now();
 
+  // Enhanced logging: Stage 1 - Webhook Receipt
+  console.log(`[${correlationId}] Stage: RECEIPT, Status: RECEIVED, Method: ${req.method}, Headers: ${JSON.stringify(Object.fromEntries(req.headers))}`);
+
   try {
     // Get raw body for signature verification
     const rawBody = await req.text();
     const signature = req.headers.get("x-signature") || "";
-    const webhookSecret = Deno.env.get("WEBHOOK_SECRET");
+    const webhookSecret = Deno.env.get("WEBHOOK_SECRET") || Deno.env.get("HMAC_SECRET");
+
+    // Enhanced logging: Stage 2 - HMAC Verification
+    console.log(`[${correlationId}] Stage: HMAC_VERIFICATION, Status: CHECKING, HasSecret: ${!!webhookSecret}, HasSignature: ${!!signature}`);
 
     // Signature is optional; if provided and secret configured, verify it
     let signatureValid = false;
     if (webhookSecret && signature) {
       signatureValid = await verifyHmacSignature(rawBody, signature, webhookSecret);
+      console.log(`[${correlationId}] Stage: HMAC_VERIFICATION, Status: ${signatureValid ? 'SUCCESS' : 'FAILED'}`);
       if (!signatureValid) {
+        console.error(`[${correlationId}] Stage: HMAC_VERIFICATION, Status: REJECTED, Reason: Invalid signature`);
         return new Response(
           JSON.stringify({ error: "Invalid signature" }),
           { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+    } else {
+      console.log(`[${correlationId}] Stage: HMAC_VERIFICATION, Status: SKIPPED, Reason: ${!webhookSecret ? 'No secret configured' : 'No signature provided'}`);
     }
 
-    // Parse JSON payload
+    // Enhanced logging: Stage 3 - JSON Parsing
+    console.log(`[${correlationId}] Stage: JSON_PARSING, Status: ATTEMPTING, BodyLength: ${rawBody.length}`);
+    
     let rawPayload: unknown;
     try {
       rawPayload = JSON.parse(rawBody);
-    } catch {
+      console.log(`[${correlationId}] Stage: JSON_PARSING, Status: SUCCESS`);
+    } catch (parseError) {
+      console.error(`[${correlationId}] Stage: JSON_PARSING, Status: FAILED, Error: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
       return new Response(
         JSON.stringify({ error: "Invalid JSON payload" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -339,7 +358,7 @@ Deno.serve(async (req) => {
     // === HANDLE CONTEXT WEBHOOKS (market context indicator) ===
     const payloadObj = rawPayload as Record<string, unknown>;
     if (payloadObj.type === 'CONTEXT') {
-      console.log(`[${correlationId}] Received CONTEXT webhook for ${payloadObj.ticker}`);
+      console.log(`[${correlationId}] Stage: CONTEXT_WEBHOOK, Status: DETECTED, Ticker: ${payloadObj.ticker}`);
       
       try {
         const supabase = createDbClient();
@@ -347,6 +366,7 @@ Deno.serve(async (req) => {
         
         // Validate required fields
         if (!contextPayload.ticker || !contextPayload.price) {
+          console.error(`[${correlationId}] Stage: CONTEXT_VALIDATION, Status: FAILED, Reason: Missing required fields`);
           return new Response(
             JSON.stringify({ 
               error: 'Invalid CONTEXT payload',
@@ -355,6 +375,8 @@ Deno.serve(async (req) => {
             { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         }
+        
+        console.log(`[${correlationId}] Stage: CONTEXT_STORAGE, Status: SAVING`);
         
         // Save full context to market context table
         const result = await saveContext(contextPayload);
@@ -374,13 +396,14 @@ Deno.serve(async (req) => {
         });
         
         if (!result) {
+          console.error(`[${correlationId}] Stage: CONTEXT_STORAGE, Status: FAILED`);
           return new Response(
             JSON.stringify({ error: 'Failed to save context' }),
             { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         }
         
-        console.log(`[${correlationId}] Context saved: ${result.id} for ${contextPayload.ticker}`);
+        console.log(`[${correlationId}] Stage: CONTEXT_STORAGE, Status: SUCCESS, ContextId: ${result.id}`);
         
         return new Response(
           JSON.stringify({
@@ -392,7 +415,7 @@ Deno.serve(async (req) => {
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       } catch (error) {
-        console.error(`[${correlationId}] Error processing CONTEXT webhook:`, error);
+        console.error(`[${correlationId}] Stage: CONTEXT_PROCESSING, Status: ERROR, Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
         return new Response(
           JSON.stringify({ 
             error: 'Failed to process context',
@@ -404,7 +427,10 @@ Deno.serve(async (req) => {
     }
 
     // === HANDLE TRADING SIGNALS ===
+    console.log(`[${correlationId}] Stage: SIGNAL_PARSING, Status: DETECTING_SOURCE`);
     const indicatorSource = detectIndicatorSource(payloadObj);
+    console.log(`[${correlationId}] Stage: SIGNAL_PARSING, Status: SOURCE_DETECTED, Source: ${indicatorSource}`);
+    
     let parsedSignal: IncomingSignal | null = null;
     let parseErrors: string[] = [];
     let isTestPing = false;
@@ -413,6 +439,7 @@ Deno.serve(async (req) => {
       const tvResult = parseTradingViewPayload(rawPayload);
       parsedSignal = tvResult.signal;
       parseErrors = tvResult.errors;
+      console.log(`[${correlationId}] Stage: SIGNAL_PARSING, Status: ${parseErrors.length > 0 ? 'FAILED' : 'SUCCESS'}, Parser: TradingView, Errors: ${parseErrors.length}`);
     } else {
       const indicatorResult = parseIndicatorPayload(rawPayload, {
         scoreConfig: {
@@ -425,9 +452,11 @@ Deno.serve(async (req) => {
       parsedSignal = indicatorResult.signal;
       parseErrors = indicatorResult.errors;
       isTestPing = indicatorResult.isTest;
+      console.log(`[${correlationId}] Stage: SIGNAL_PARSING, Status: ${parseErrors.length > 0 ? 'FAILED' : 'SUCCESS'}, Parser: Indicator, Errors: ${parseErrors.length}, IsTest: ${isTestPing}`);
     }
 
     if (isTestPing) {
+      console.log(`[${correlationId}] Stage: TEST_PING, Status: RECEIVED`);
       return new Response(
         JSON.stringify({
           status: "OK",
@@ -440,6 +469,7 @@ Deno.serve(async (req) => {
     }
 
     if (!parsedSignal || parseErrors.length > 0) {
+      console.error(`[${correlationId}] Stage: SIGNAL_PARSING, Status: REJECTED, Errors: ${JSON.stringify(parseErrors)}`);
       return new Response(
         JSON.stringify({
           status: "REJECTED",
@@ -449,6 +479,7 @@ Deno.serve(async (req) => {
       );
     }
 
+    console.log(`[${correlationId}] Stage: SIGNAL_STORAGE, Status: CHECKING_DUPLICATE`);
     const supabase = createDbClient();
     const signalHash = await generateSignalHash(rawPayload as Record<string, unknown>);
 
@@ -459,6 +490,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (existingSignal) {
+      console.log(`[${correlationId}] Stage: SIGNAL_STORAGE, Status: DUPLICATE_DETECTED, ExistingSignalId: ${existingSignal.id}`);
       return new Response(
         JSON.stringify({
           message: "Duplicate signal detected",
@@ -469,6 +501,7 @@ Deno.serve(async (req) => {
       );
     }
 
+    console.log(`[${correlationId}] Stage: SIGNAL_STORAGE, Status: INSERTING, Underlying: ${parsedSignal.underlying}, Strike: ${parsedSignal.strike}, Type: ${parsedSignal.option_type}`);
     const { data: insertedSignal, error: insertError } = await supabase
       .from("signals")
       .insert({
@@ -488,11 +521,14 @@ Deno.serve(async (req) => {
       });
 
     if (insertError || !insertedSignal) {
+      console.error(`[${correlationId}] Stage: SIGNAL_STORAGE, Status: FAILED, Error: ${insertError?.message || 'Unknown error'}`);
       return new Response(
         JSON.stringify({ error: "Failed to record signal" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    console.log(`[${correlationId}] Stage: SIGNAL_STORAGE, Status: SUCCESS, SignalId: ${insertedSignal.id}`);
 
     const pipelineSource = indicatorSource === 'mtf-trend-dots' ? 'MTF' : 'TRADINGVIEW';
     const pipelinePayload = buildPipelinePayload(
@@ -503,7 +539,7 @@ Deno.serve(async (req) => {
       signatureValid
     );
 
-    console.log(`[${correlationId}] Processing trading signal through unified pipeline...`);
+    console.log(`[${correlationId}] Stage: PIPELINE_PROCESSING, Status: QUEUED, SignalId: ${insertedSignal.id}`);
 
     // Return HTTP 200 immediately to prevent timeouts (Requirement 1.4)
     // Process signal asynchronously
@@ -514,11 +550,13 @@ Deno.serve(async (req) => {
       insertedSignal.id,
       signalHash
     ).catch(error => {
-      console.error(`[${correlationId}] Async processing error:`, error);
+      console.error(`[${correlationId}] Stage: ASYNC_PROCESSING, Status: ERROR, Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     });
 
     const processingTime = Date.now() - startTime;
     metricsService.recordSignalProcessingLatency(processingTime);
+
+    console.log(`[${correlationId}] Stage: WEBHOOK_RESPONSE, Status: SUCCESS, ProcessingTime: ${processingTime}ms`);
 
     return new Response(
       JSON.stringify({
@@ -550,7 +588,12 @@ Deno.serve(async (req) => {
       }
     );
   }
-});
+}
+
+// Allow running standalone (Supabase edge / local dev)
+if (import.meta.main) {
+  Deno.serve(handleWebhook);
+}
 
 /**
  * Process signal asynchronously through the unified pipeline
@@ -566,7 +609,7 @@ async function processSignalAsync(
   const decisionStartTime = Date.now();
   
   try {
-    console.log(`[${correlationId}] Processing signal through unified pipeline...`);
+    console.log(`[${correlationId}] Stage: PIPELINE_PROCESSING, Status: STARTED`);
     
     // Process through unified pipeline
     const result = await pipeline.processSignal(rawPayload);
@@ -574,15 +617,11 @@ async function processSignalAsync(
     const decisionTime = Date.now() - decisionStartTime;
     metricsService.recordDecisionLatency(decisionTime);
     
+    console.log(`[${correlationId}] Stage: PIPELINE_PROCESSING, Status: COMPLETED, Success: ${result.success}, Stage: ${result.stage}, DecisionTime: ${decisionTime}ms`);
+    
     // Log result
     if (result.success) {
-      console.log(`[${correlationId}] ✅ Signal processed successfully:`, {
-        tracking_id: result.trackingId,
-        symbol: result.signal?.symbol,
-        decision: result.decision?.decision,
-        confidence: result.decision?.confidence,
-        position_size: result.decision?.positionSize,
-      });
+      console.log(`[${correlationId}] Stage: DECISION_MADE, Status: SUCCESS, Decision: ${result.decision?.decision}, Confidence: ${result.decision?.confidence}, PositionSize: ${result.decision?.positionSize}`);
       
       metricsService.recordSignalAccepted();
 
@@ -591,6 +630,8 @@ async function processSignalAsync(
         processed_at: new Date().toISOString(),
         validation_errors: null,
       }).eq('id', signalId);
+      
+      console.log(`[${correlationId}] Stage: SIGNAL_UPDATE, Status: SUCCESS, NewStatus: COMPLETED`);
       
       // Store signal in database
       if (result.signal) {
@@ -617,14 +658,18 @@ async function processSignalAsync(
           },
           created_at: new Date().toISOString(),
         });
+        
+        console.log(`[${correlationId}] Stage: REFACTORED_SIGNAL_STORAGE, Status: SUCCESS, TrackingId: ${result.trackingId}`);
       }
 
       if (result.decision?.decision === 'ENTER' && result.signal) {
+        console.log(`[${correlationId}] Stage: ORDER_CREATION, Status: PREPARING`);
+        
         const parsedSignal = (result.signal.metadata?.parsed_signal ?? null) as IncomingSignal | null;
         if (!parsedSignal) {
-          console.warn(`[${correlationId}] Missing parsed signal metadata for order execution`);
+          console.warn(`[${correlationId}] Stage: ORDER_CREATION, Status: SKIPPED, Reason: Missing parsed signal metadata`);
         } else if (parsedSignal.action === 'CLOSE') {
-          console.warn(`[${correlationId}] CLOSE action received with ENTER decision - skipping order execution`);
+          console.warn(`[${correlationId}] Stage: ORDER_CREATION, Status: SKIPPED, Reason: CLOSE action with ENTER decision`);
         } else {
           const orderSide = resolveOrderSide(parsedSignal.action);
           const orderType = resolveOrderType(parsedSignal.order_type);
@@ -650,6 +695,8 @@ async function processSignalAsync(
             time_in_force: parsedSignal.time_in_force || 'DAY',
           };
 
+          console.log(`[${correlationId}] Stage: ORDER_SUBMISSION, Status: SUBMITTING, Symbol: ${occSymbol}, Quantity: ${orderRequest.quantity}`);
+
           const { adapter, safety_result, warnings } = createAdapter({
             paper_config: {
               slippage_percent: 0.1,
@@ -659,11 +706,13 @@ async function processSignalAsync(
           });
 
           if (warnings.length > 0) {
-            console.warn(`[${correlationId}] Adapter warnings:`, warnings);
+            console.warn(`[${correlationId}] Stage: ADAPTER_CREATION, Status: WARNING, Warnings: ${JSON.stringify(warnings)}`);
           }
 
           const basePrice = resolveEntryPrice(parsedSignal, result.signal.metadata || {}) ?? 1.5;
           const { result: orderResult, trade } = await adapter.submitOrder(orderRequest, basePrice);
+
+          console.log(`[${correlationId}] Stage: ORDER_SUBMISSION, Status: ${orderResult.success ? 'SUCCESS' : 'FAILED'}, OrderStatus: ${orderResult.status}, BrokerOrderId: ${orderResult.broker_order_id}`);
 
           await supabase.from('adapter_logs').insert({
             correlation_id: correlationId,
@@ -703,10 +752,14 @@ async function processSignalAsync(
             .single();
 
           if (orderError) {
-            console.error(`[${correlationId}] Failed to create order record:`, orderError);
+            console.error(`[${correlationId}] Stage: ORDER_STORAGE, Status: FAILED, Error: ${orderError.message}`);
+          } else {
+            console.log(`[${correlationId}] Stage: ORDER_STORAGE, Status: SUCCESS, OrderId: ${orderRow?.id}`);
           }
 
           if (orderRow && orderResult.status === 'FILLED' && trade) {
+            console.log(`[${correlationId}] Stage: TRADE_EXECUTION, Status: FILLED, ExecutionPrice: ${trade.execution_price}, Quantity: ${trade.quantity}`);
+            
             await supabase.from('trades').insert({
               order_id: orderRow.id,
               broker_trade_id: trade.broker_trade_id || null,
@@ -723,6 +776,8 @@ async function processSignalAsync(
               executed_at: trade.executed_at,
             });
 
+            console.log(`[${correlationId}] Stage: TRADE_STORAGE, Status: SUCCESS`);
+
             await supabase
               .from('refactored_positions')
               .update({
@@ -730,15 +785,15 @@ async function processSignalAsync(
                 updated_at: new Date().toISOString(),
               })
               .eq('signal_id', result.trackingId);
+              
+            console.log(`[${correlationId}] Stage: POSITION_UPDATE, Status: SUCCESS, EntryPrice: ${trade.execution_price}`);
           }
         }
+      } else {
+        console.log(`[${correlationId}] Stage: ORDER_CREATION, Status: SKIPPED, Reason: Decision was ${result.decision?.decision || 'unknown'}`);
       }
     } else {
-      console.log(`[${correlationId}] ❌ Signal processing failed:`, {
-        tracking_id: result.trackingId,
-        stage: result.stage,
-        reason: result.failureReason,
-      });
+      console.log(`[${correlationId}] Stage: PIPELINE_PROCESSING, Status: FAILED, Stage: ${result.stage}, Reason: ${result.failureReason}`);
       
       metricsService.recordSignalRejected(result.failureReason || 'Unknown reason');
 
@@ -750,6 +805,8 @@ async function processSignalAsync(
           reason: result.failureReason || 'Unknown failure',
         }],
       }).eq('id', signalId);
+      
+      console.log(`[${correlationId}] Stage: SIGNAL_UPDATE, Status: SUCCESS, NewStatus: REJECTED`);
       
       // Store failure in database (signal + pipeline failure)
       if (result.signal) {
@@ -777,6 +834,8 @@ async function processSignalAsync(
           },
           created_at: new Date().toISOString(),
         });
+        
+        console.log(`[${correlationId}] Stage: REFACTORED_SIGNAL_STORAGE, Status: SUCCESS, TrackingId: ${result.trackingId}, Valid: false`);
       }
 
       await supabase.from('refactored_pipeline_failures').insert({
@@ -788,11 +847,13 @@ async function processSignalAsync(
         signal_data: result.signal || rawPayload,
         timestamp: new Date().toISOString(),
       });
+      
+      console.log(`[${correlationId}] Stage: FAILURE_STORAGE, Status: SUCCESS`);
     }
     
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`[${correlationId}] Signal processing error:`, errorMessage);
+    console.error(`[${correlationId}] Stage: PROCESSING_ERROR, Status: EXCEPTION, Error: ${errorMessage}, Stack: ${error instanceof Error ? error.stack : 'N/A'}`);
     
     metricsService.recordSignalRejected('Processing error');
 
@@ -805,8 +866,10 @@ async function processSignalAsync(
           reason: errorMessage,
         }],
       }).eq('id', signalId);
+      
+      console.log(`[${correlationId}] Stage: ERROR_SIGNAL_UPDATE, Status: SUCCESS`);
     } catch (updateError) {
-      console.error(`[${correlationId}] Failed to update signal status:`, updateError);
+      console.error(`[${correlationId}] Stage: ERROR_SIGNAL_UPDATE, Status: FAILED, Error: ${updateError instanceof Error ? updateError.message : 'Unknown error'}`);
     }
     
     // Log error to database
@@ -817,8 +880,10 @@ async function processSignalAsync(
         raw_payload: rawPayload,
         created_at: new Date().toISOString(),
       });
+      
+      console.log(`[${correlationId}] Stage: ERROR_STORAGE, Status: SUCCESS`);
     } catch (dbError) {
-      console.error(`[${correlationId}] Failed to log error to database:`, dbError);
+      console.error(`[${correlationId}] Stage: ERROR_STORAGE, Status: FAILED, Error: ${dbError instanceof Error ? dbError.message : 'Unknown error'}`);
     }
   }
 }
