@@ -82,6 +82,41 @@ if (exitWorkerEnabled) {
   }
 }
 
+type EdgeHandler = (req: Request) => Response | Promise<Response>;
+
+async function loadEdgeHandler(functionName: keyof typeof functions): Promise<EdgeHandler | null> {
+  let capturedHandler: EdgeHandler | null = null;
+  const denoAny = Deno as unknown as { serve?: (...args: unknown[]) => unknown };
+  const originalServe = denoAny.serve;
+
+  if (originalServe) {
+    denoAny.serve = ((optionsOrHandler: unknown, maybeHandler?: unknown) => {
+      const handler = typeof optionsOrHandler === "function"
+        ? (optionsOrHandler as EdgeHandler)
+        : (maybeHandler as EdgeHandler | undefined);
+      if (handler) {
+        capturedHandler = handler;
+      }
+      return {
+        listen: () => {},
+        close: () => {},
+        finished: Promise.resolve(),
+      };
+    }) as typeof originalServe;
+  }
+
+  try {
+    const module = await functions[functionName]();
+    // Prioritize captured handler (from Deno.serve) over default export
+    const handler = capturedHandler ?? (module.default as EdgeHandler | undefined);
+    return handler ?? null;
+  } finally {
+    if (originalServe) {
+      denoAny.serve = originalServe;
+    }
+  }
+}
+
 async function handler(req: Request): Promise<Response> {
   const startTime = Date.now();
   const slowRequestMs = parseInt(Deno.env.get("SLOW_REQUEST_MS") || "2000");
@@ -129,11 +164,12 @@ async function handler(req: Request): Promise<Response> {
   if (functionName in functions) {
     try {
       // Dynamically import and execute the function
-      const module = await functions[functionName as keyof typeof functions]();
-      
-      // Most Supabase edge functions export a default handler
-      if (module.default) {
-        const response = await module.default(req);
+      const edgeHandler = await loadEdgeHandler(functionName as keyof typeof functions);
+
+      // Most Supabase edge functions export a default handler,
+      // but some call Deno.serve(...) directly. We support both.
+      if (edgeHandler) {
+        const response = await edgeHandler(req);
         
         // Add CORS headers to response
         const headers = new Headers(response.headers);
@@ -153,6 +189,7 @@ async function handler(req: Request): Promise<Response> {
         }
         return wrapped;
       }
+      throw new Error(`No handler exported for '${functionName}'`);
     } catch (error) {
       console.error(`Error executing function ${functionName}:`, error);
       const response = new Response(
