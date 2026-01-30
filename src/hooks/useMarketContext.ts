@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { POLLING_INTERVALS } from "@/lib/polling";
+import apiClient from "@/lib/api-client";
 
 export interface MarketContext {
   id: string;
@@ -44,23 +45,12 @@ export function useMarketContext(ticker?: string) {
     queryFn: async () => {
       if (!ticker) return null;
       
-      const { data, error } = await supabase
-        .from("market_context")
-        .select("*")
-        .eq("ticker", ticker.toUpperCase())
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (error) {
-        console.error("Error fetching market context:", error);
-        throw error;
-      }
-
-      return data as MarketContext | null;
+      const { data, error } = await apiClient.getMarketContext(ticker.toUpperCase());
+      if (error) throw error;
+      return (data as MarketContext | null) || null;
     },
     enabled: !!ticker,
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: POLLING_INTERVALS.marketContext,
     staleTime: 15000, // Consider data stale after 15 seconds
   });
 }
@@ -69,29 +59,11 @@ export function useAllMarketContexts() {
   return useQuery({
     queryKey: ["market-contexts-all"],
     queryFn: async () => {
-      // Get latest context for each ticker using distinct
-      const { data, error } = await supabase
-        .from("market_context")
-        .select("*")
-        .order("updated_at", { ascending: false })
-        .limit(50);
-
-      if (error) {
-        console.error("Error fetching market contexts:", error);
-        throw error;
-      }
-
-      // Group by ticker and take latest
-      const latestByTicker = new Map<string, MarketContext>();
-      for (const ctx of (data || [])) {
-        if (!latestByTicker.has(ctx.ticker)) {
-          latestByTicker.set(ctx.ticker, ctx as MarketContext);
-        }
-      }
-
-      return Array.from(latestByTicker.values());
+      const { data, error } = await apiClient.getMarketContexts(50);
+      if (error) throw error;
+      return (data as MarketContext[]) || [];
     },
-    refetchInterval: 30000,
+    refetchInterval: POLLING_INTERVALS.marketContext,
     staleTime: 15000,
   });
 }

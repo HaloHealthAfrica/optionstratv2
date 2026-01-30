@@ -6,7 +6,7 @@
 import type { Position, OrderRequest, OrderSide, OrderType, Trade } from "./types.ts";
 import type { ExitEvaluation, PositionWithMarketData } from "./exit-rules.ts";
 import { createAdapter } from "./adapter-factory.ts";
-import { createSupabaseClient } from "./supabase-client.ts";
+import { createDbClient } from "./db-client.ts";
 import { generateOccSymbol } from "./types.ts";
 
 export interface AutoCloseResult {
@@ -43,7 +43,7 @@ async function submitCloseOrder(
   dryRun = false
 ): Promise<AutoCloseResult> {
   const correlationId = `auto-close-${position.id}-${Date.now()}`;
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   
   try {
     const side = getCloseSide(position);
@@ -278,3 +278,4 @@ export async function autoClosePositions(
   
   return results;
 }
+

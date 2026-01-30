@@ -10,10 +10,15 @@
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
-import { verifyHmacSignature } from "../_shared/hmac.ts";
+import { createDbClient } from "../_shared/db-client.ts";
+import { verifyHmacSignature, generateSignalHash } from "../_shared/hmac.ts";
 import { saveContext } from "../_shared/market-context-service.ts";
 import type { ContextWebhookPayload } from "../_shared/market-context-types.ts";
+import { parseTradingViewPayload } from "../_shared/tradingview-parser.ts";
+import { parseIndicatorPayload, detectIndicatorSource } from "../_shared/indicator-parsers/index.ts";
+import type { IncomingSignal } from "../_shared/types.ts";
+import { generateOccSymbol, type OrderRequest, type OrderSide, type OrderType } from "../_shared/types.ts";
+import { createAdapter } from "../_shared/adapter-factory.ts";
 
 // Import refactored components
 import { SignalPipeline } from "../_shared/refactored/pipeline/signal-pipeline.ts";
@@ -41,7 +46,7 @@ function initializePipeline(): {
   metricsService: MetricsService;
   degradedModeTracker: DegradedModeTracker;
 } {
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   
   // Initialize monitoring services
   const auditLogger = new AuditLogger(async (entry: AuditLogEntry) => {
@@ -149,6 +154,139 @@ const { pipeline, auditLogger, metricsService, degradedModeTracker } = initializ
 
 console.log('[WEBHOOK] Initialized with refactored SignalPipeline and DecisionOrchestrator');
 
+function inferTimeframe(payload: Record<string, unknown>): string {
+  const candidates = [
+    payload.timeframe,
+    payload.tf,
+    payload.interval,
+    payload.trigger_timeframe,
+    payload.timeframe_minutes,
+  ];
+
+  const nested = payload.market as Record<string, unknown> | undefined;
+  if (nested?.timeframe) {
+    candidates.push(nested.timeframe);
+  }
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+    if (typeof candidate === 'number' && candidate > 0) {
+      return `${candidate}m`;
+    }
+  }
+
+  return '5m';
+}
+
+function inferTimestamp(payload: Record<string, unknown>): string | undefined {
+  const candidates = [
+    payload.timestamp,
+    payload.time,
+    payload.signal_time,
+  ];
+
+  const signal = payload.signal as Record<string, unknown> | undefined;
+  if (signal?.timestamp) {
+    candidates.push(signal.timestamp);
+  }
+
+  const journal = payload.journal as Record<string, unknown> | undefined;
+  if (journal?.created_at) {
+    candidates.push(journal.created_at);
+  }
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+    if (typeof candidate === 'number' && candidate > 0) {
+      return new Date(candidate).toISOString();
+    }
+  }
+
+  return undefined;
+}
+
+function resolveOrderSide(action: IncomingSignal['action']): OrderSide {
+  switch (action) {
+    case 'BUY':
+      return 'BUY_TO_OPEN';
+    case 'SELL':
+      return 'SELL_TO_OPEN';
+    case 'CLOSE':
+      return 'SELL_TO_CLOSE';
+    default:
+      return 'BUY_TO_OPEN';
+  }
+}
+
+function resolveOrderType(orderType?: OrderType): OrderType {
+  return orderType ?? 'MARKET';
+}
+
+function resolveEntryPrice(parsedSignal: IncomingSignal, metadata: Record<string, unknown>): number | undefined {
+  const candidates = [
+    parsedSignal.limit_price,
+    (metadata.entry_price as number | undefined),
+    (metadata.entry as { price?: number } | undefined)?.price,
+  ];
+
+  return candidates.find((value) => typeof value === 'number' && value > 0);
+}
+
+function buildPipelinePayload(
+  incoming: IncomingSignal,
+  source: string,
+  rawPayload: Record<string, unknown>,
+  signalHash: string,
+  signatureVerified: boolean
+): Record<string, unknown> {
+  const direction = incoming.option_type;
+  const timeframe = inferTimeframe(rawPayload);
+  const timestamp = inferTimestamp(rawPayload);
+
+  const entryPriceCandidates = [
+    incoming.limit_price,
+    (rawPayload.entry as Record<string, unknown> | undefined)?.price,
+    rawPayload.price,
+    rawPayload.current_price,
+    rawPayload.last,
+  ];
+
+  const entryPrice = entryPriceCandidates.find(
+    (candidate) => typeof candidate === 'number' && candidate > 0
+  );
+
+  const metadata = {
+    ...incoming.metadata,
+    parsed_signal: incoming,
+    raw_payload: rawPayload,
+    signal_hash: signalHash,
+    signature_verified: signatureVerified,
+    indicator_source: source,
+    entry_price: entryPrice,
+  };
+
+  if (typeof metadata.alignment_score === 'number') {
+    metadata.mtf_aligned = metadata.alignment_score >= 50;
+  }
+
+  if (typeof metadata.confluence_score === 'number') {
+    metadata.confluence = metadata.confluence_score / 100;
+  }
+
+  return {
+    source,
+    symbol: incoming.underlying,
+    direction,
+    timeframe,
+    ...(timestamp ? { timestamp } : {}),
+    metadata,
+  };
+}
+
 /**
  * Main webhook handler
  */
@@ -175,13 +313,10 @@ Deno.serve(async (req) => {
     const signature = req.headers.get("x-signature") || "";
     const webhookSecret = Deno.env.get("WEBHOOK_SECRET");
 
-    // Verify HMAC signature when configured
-    let signatureValid: boolean | null = null;
-    if (webhookSecret) {
-      signatureValid = signature
-        ? await verifyHmacSignature(rawBody, signature, webhookSecret)
-        : false;
-
+    // Signature is optional; if provided and secret configured, verify it
+    let signatureValid = false;
+    if (webhookSecret && signature) {
+      signatureValid = await verifyHmacSignature(rawBody, signature, webhookSecret);
       if (!signatureValid) {
         return new Response(
           JSON.stringify({ error: "Invalid signature" }),
@@ -207,7 +342,7 @@ Deno.serve(async (req) => {
       console.log(`[${correlationId}] Received CONTEXT webhook for ${payloadObj.ticker}`);
       
       try {
-        const supabase = createSupabaseClient();
+        const supabase = createDbClient();
         const contextPayload = rawPayload as ContextWebhookPayload;
         
         // Validate required fields
@@ -269,28 +404,133 @@ Deno.serve(async (req) => {
     }
 
     // === HANDLE TRADING SIGNALS ===
+    const indicatorSource = detectIndicatorSource(payloadObj);
+    let parsedSignal: IncomingSignal | null = null;
+    let parseErrors: string[] = [];
+    let isTestPing = false;
+
+    if (indicatorSource === 'tradingview') {
+      const tvResult = parseTradingViewPayload(rawPayload);
+      parsedSignal = tvResult.signal;
+      parseErrors = tvResult.errors;
+    } else {
+      const indicatorResult = parseIndicatorPayload(rawPayload, {
+        scoreConfig: {
+          minThreshold: 70,
+          baseQuantity: 1,
+          scalingFactor: 0.05,
+          maxQuantity: 10,
+        },
+      });
+      parsedSignal = indicatorResult.signal;
+      parseErrors = indicatorResult.errors;
+      isTestPing = indicatorResult.isTest;
+    }
+
+    if (isTestPing) {
+      return new Response(
+        JSON.stringify({
+          status: "OK",
+          message: "Test ping received",
+          source: indicatorSource,
+          correlation_id: correlationId,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!parsedSignal || parseErrors.length > 0) {
+      return new Response(
+        JSON.stringify({
+          status: "REJECTED",
+          validation_errors: parseErrors.length > 0 ? parseErrors : ['Unable to parse signal'],
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const supabase = createDbClient();
+    const signalHash = await generateSignalHash(rawPayload as Record<string, unknown>);
+
+    const { data: existingSignal } = await supabase
+      .from("signals")
+      .select("id, status")
+      .eq("signal_hash", signalHash)
+      .single();
+
+    if (existingSignal) {
+      return new Response(
+        JSON.stringify({
+          message: "Duplicate signal detected",
+          signal_id: existingSignal.id,
+          status: existingSignal.status,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const { data: insertedSignal, error: insertError } = await supabase
+      .from("signals")
+      .insert({
+        source: indicatorSource,
+        signal_hash: signalHash,
+        raw_payload: rawPayload,
+        signature_verified: signatureValid,
+        action: parsedSignal.action,
+        underlying: parsedSignal.underlying,
+        strike: parsedSignal.strike,
+        expiration: parsedSignal.expiration,
+        option_type: parsedSignal.option_type,
+        quantity: parsedSignal.quantity,
+        strategy_type: parsedSignal.strategy_type || null,
+        status: "PENDING",
+        validation_errors: null,
+      });
+
+    if (insertError || !insertedSignal) {
+      return new Response(
+        JSON.stringify({ error: "Failed to record signal" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const pipelineSource = indicatorSource === 'mtf-trend-dots' ? 'MTF' : 'TRADINGVIEW';
+    const pipelinePayload = buildPipelinePayload(
+      parsedSignal,
+      pipelineSource,
+      rawPayload as Record<string, unknown>,
+      signalHash,
+      signatureValid
+    );
+
     console.log(`[${correlationId}] Processing trading signal through unified pipeline...`);
-    
+
     // Return HTTP 200 immediately to prevent timeouts (Requirement 1.4)
     // Process signal asynchronously
-    processSignalAsync(rawPayload, correlationId, signatureValid).catch(error => {
+    processSignalAsync(
+      pipelinePayload,
+      correlationId,
+      signatureValid,
+      insertedSignal.id,
+      signalHash
+    ).catch(error => {
       console.error(`[${correlationId}] Async processing error:`, error);
     });
-    
+
     const processingTime = Date.now() - startTime;
     metricsService.recordSignalProcessingLatency(processingTime);
-    
+
     return new Response(
       JSON.stringify({
-        status: "ACCEPTED",
-        message: "Signal received and queued for processing",
+        signal_id: insertedSignal.id,
+        status: "PROCESSING",
         correlation_id: correlationId,
         processing_time_ms: processingTime,
         system: "REFACTORED",
       }),
-      { 
-        status: 200, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );
     
@@ -318,9 +558,11 @@ Deno.serve(async (req) => {
 async function processSignalAsync(
   rawPayload: any,
   correlationId: string,
-  signatureValid: boolean | null
+  signatureValid: boolean,
+  signalId: string,
+  signalHash: string
 ): Promise<void> {
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   const decisionStartTime = Date.now();
   
   try {
@@ -343,6 +585,12 @@ async function processSignalAsync(
       });
       
       metricsService.recordSignalAccepted();
+
+      await supabase.from('signals').update({
+        status: 'COMPLETED',
+        processed_at: new Date().toISOString(),
+        validation_errors: null,
+      }).eq('id', signalId);
       
       // Store signal in database
       if (result.signal) {
@@ -350,7 +598,9 @@ async function processSignalAsync(
           ...(result.signal.metadata || {}),
           correlation_id: correlationId,
           signature_valid: signatureValid,
-          raw_payload: rawPayload,
+          signal_hash: signalHash,
+          original_signal_id: signalId,
+          raw_payload: result.signal.metadata?.raw_payload ?? rawPayload,
         };
 
         await supabase.from('refactored_signals').insert({
@@ -368,6 +618,121 @@ async function processSignalAsync(
           created_at: new Date().toISOString(),
         });
       }
+
+      if (result.decision?.decision === 'ENTER' && result.signal) {
+        const parsedSignal = (result.signal.metadata?.parsed_signal ?? null) as IncomingSignal | null;
+        if (!parsedSignal) {
+          console.warn(`[${correlationId}] Missing parsed signal metadata for order execution`);
+        } else if (parsedSignal.action === 'CLOSE') {
+          console.warn(`[${correlationId}] CLOSE action received with ENTER decision - skipping order execution`);
+        } else {
+          const orderSide = resolveOrderSide(parsedSignal.action);
+          const orderType = resolveOrderType(parsedSignal.order_type);
+          const occSymbol = generateOccSymbol(
+            parsedSignal.underlying,
+            parsedSignal.expiration,
+            parsedSignal.option_type,
+            parsedSignal.strike
+          );
+
+          const orderRequest: OrderRequest = {
+            signal_id: signalId,
+            underlying: parsedSignal.underlying,
+            symbol: occSymbol,
+            strike: parsedSignal.strike,
+            expiration: parsedSignal.expiration,
+            option_type: parsedSignal.option_type,
+            side: orderSide,
+            quantity: Math.max(1, result.decision.positionSize || parsedSignal.quantity || 1),
+            order_type: orderType,
+            limit_price: parsedSignal.limit_price,
+            stop_price: parsedSignal.stop_price,
+            time_in_force: parsedSignal.time_in_force || 'DAY',
+          };
+
+          const { adapter, safety_result, warnings } = createAdapter({
+            paper_config: {
+              slippage_percent: 0.1,
+              commission_per_contract: 0.65,
+              fee_per_contract: 0.02,
+            },
+          });
+
+          if (warnings.length > 0) {
+            console.warn(`[${correlationId}] Adapter warnings:`, warnings);
+          }
+
+          const basePrice = resolveEntryPrice(parsedSignal, result.signal.metadata || {}) ?? 1.5;
+          const { result: orderResult, trade } = await adapter.submitOrder(orderRequest, basePrice);
+
+          await supabase.from('adapter_logs').insert({
+            correlation_id: correlationId,
+            adapter_name: adapter.name,
+            operation: 'SUBMIT_ORDER',
+            request_payload: orderRequest,
+            response_payload: orderResult,
+            status: orderResult.success ? 'SUCCESS' : 'FAILURE',
+            duration_ms: Date.now() - decisionStartTime,
+          });
+
+          const { data: orderRow, error: orderError } = await supabase
+            .from('orders')
+            .insert({
+              signal_id: signalId,
+              broker_order_id: orderResult.broker_order_id,
+              client_order_id: `CLT-${signalId.substring(0, 8)}-${Date.now()}`,
+              underlying: orderRequest.underlying,
+              symbol: orderRequest.symbol,
+              strike: orderRequest.strike,
+              expiration: orderRequest.expiration,
+              option_type: orderRequest.option_type,
+              side: orderRequest.side,
+              quantity: orderRequest.quantity,
+              order_type: orderRequest.order_type,
+              limit_price: orderRequest.limit_price || null,
+              stop_price: orderRequest.stop_price || null,
+              time_in_force: orderRequest.time_in_force,
+              mode: adapter.mode,
+              status: orderResult.status,
+              filled_quantity: orderResult.filled_quantity,
+              avg_fill_price: orderResult.avg_fill_price || null,
+              submitted_at: new Date().toISOString(),
+              filled_at: orderResult.status === 'FILLED' ? new Date().toISOString() : null,
+            })
+            .select('*')
+            .single();
+
+          if (orderError) {
+            console.error(`[${correlationId}] Failed to create order record:`, orderError);
+          }
+
+          if (orderRow && orderResult.status === 'FILLED' && trade) {
+            await supabase.from('trades').insert({
+              order_id: orderRow.id,
+              broker_trade_id: trade.broker_trade_id || null,
+              execution_price: trade.execution_price,
+              quantity: trade.quantity,
+              commission: trade.commission,
+              fees: trade.fees,
+              total_cost: trade.total_cost,
+              underlying: orderRequest.underlying,
+              symbol: orderRequest.symbol,
+              strike: orderRequest.strike,
+              expiration: orderRequest.expiration,
+              option_type: orderRequest.option_type,
+              executed_at: trade.executed_at,
+            });
+
+            await supabase
+              .from('refactored_positions')
+              .update({
+                entry_price: trade.execution_price,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('signal_id', result.trackingId);
+          }
+        }
+      }
     } else {
       console.log(`[${correlationId}] ❌ Signal processing failed:`, {
         tracking_id: result.trackingId,
@@ -376,6 +741,15 @@ async function processSignalAsync(
       });
       
       metricsService.recordSignalRejected(result.failureReason || 'Unknown reason');
+
+      await supabase.from('signals').update({
+        status: 'REJECTED',
+        processed_at: new Date().toISOString(),
+        validation_errors: [{
+          stage: result.stage,
+          reason: result.failureReason || 'Unknown failure',
+        }],
+      }).eq('id', signalId);
       
       // Store failure in database (signal + pipeline failure)
       if (result.signal) {
@@ -383,7 +757,9 @@ async function processSignalAsync(
           ...(result.signal.metadata || {}),
           correlation_id: correlationId,
           signature_valid: signatureValid,
-          raw_payload: rawPayload,
+          signal_hash: signalHash,
+          original_signal_id: signalId,
+          raw_payload: result.signal.metadata?.raw_payload ?? rawPayload,
         };
 
         await supabase.from('refactored_signals').insert({
@@ -419,6 +795,19 @@ async function processSignalAsync(
     console.error(`[${correlationId}] Signal processing error:`, errorMessage);
     
     metricsService.recordSignalRejected('Processing error');
+
+    try {
+      await supabase.from('signals').update({
+        status: 'FAILED',
+        processed_at: new Date().toISOString(),
+        validation_errors: [{
+          stage: 'PROCESSING',
+          reason: errorMessage,
+        }],
+      }).eq('id', signalId);
+    } catch (updateError) {
+      console.error(`[${correlationId}] Failed to update signal status:`, updateError);
+    }
     
     // Log error to database
     try {
@@ -433,3 +822,4 @@ async function processSignalAsync(
     }
   }
 }
+

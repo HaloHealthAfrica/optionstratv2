@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import apiClient from "@/lib/api-client";
 
 interface RiskLimits {
   id: string;
@@ -10,30 +10,26 @@ interface RiskLimits {
 }
 
 async function fetchAutoCloseStatus(mode: string = "PAPER"): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("risk_limits")
-    .select("auto_close_enabled")
-    .eq("mode", mode)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  if (error) {
-    console.error("Failed to fetch auto-close status:", error);
+  try {
+    const { data, error } = await apiClient.getRiskLimits(mode);
+    if (error) {
+      console.warn('Risk limits endpoint not available, defaulting to false');
+      return false;
+    }
+    return data?.risk_limits?.auto_close_enabled ?? false;
+  } catch (error) {
+    console.warn('Failed to fetch auto-close status:', error);
     return false;
   }
-
-  return data?.auto_close_enabled ?? false;
 }
 
 async function updateAutoCloseStatus(mode: string, enabled: boolean): Promise<void> {
-  const { error } = await supabase
-    .from("risk_limits")
-    .update({ auto_close_enabled: enabled })
-    .eq("mode", mode)
-    .eq("is_active", true);
-
-  if (error) {
-    throw new Error(`Failed to update auto-close: ${error.message}`);
+  try {
+    const { error } = await apiClient.updateRiskLimits(mode, { auto_close_enabled: enabled });
+    if (error) throw error;
+  } catch (error) {
+    console.warn('Auto-close update not available:', error);
+    throw new Error(`Failed to update auto-close: ${error}`);
   }
 }
 

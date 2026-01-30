@@ -57,14 +57,7 @@ export class UnusualWhalesClient {
     const timeout = setTimeout(() => controller.abort(), this.timeout_ms);
 
     try {
-      const response = await fetch(url.toString(), {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Accept': 'application/json',
-        },
-        signal: controller.signal,
-      });
+      const response = await this.fetchWithRetry(url.toString(), controller.signal);
 
       clearTimeout(timeout);
 
@@ -78,6 +71,33 @@ export class UnusualWhalesClient {
       clearTimeout(timeout);
       throw error;
     }
+  }
+
+  private async fetchWithRetry(
+    url: string,
+    signal: AbortSignal,
+    attempt = 0
+  ): Promise<Response> {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Accept': 'application/json',
+      },
+      signal,
+    });
+
+    if (response.ok || attempt >= 2) {
+      return response;
+    }
+
+    if (response.status === 429 || (response.status >= 500 && response.status <= 599)) {
+      const backoffMs = 300 * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+      return this.fetchWithRetry(url, signal, attempt + 1);
+    }
+
+    return response;
   }
 
   /**

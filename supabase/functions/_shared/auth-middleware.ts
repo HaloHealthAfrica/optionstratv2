@@ -1,5 +1,5 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "./cors.ts";
+import { verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 
 export interface AuthResult {
   user: { id: string; email?: string } | null;
@@ -18,27 +18,32 @@ export async function validateAuth(req: Request): Promise<AuthResult> {
   }
 
   const token = authHeader.replace("Bearer ", "");
-  
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-  
-  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
-
-  const { data, error } = await supabase.auth.getUser(token);
-  
-  if (error || !data.user) {
-    return { user: null, error: error?.message || "Invalid token" };
+  const expectedToken = Deno.env.get("API_AUTH_TOKEN");
+  if (expectedToken && token === expectedToken) {
+    return { user: { id: "api-token" }, error: null };
   }
 
-  return { 
-    user: { 
-      id: data.user.id, 
-      email: data.user.email 
-    }, 
-    error: null 
-  };
+  const jwtSecret = Deno.env.get("JWT_SECRET");
+  if (!jwtSecret) {
+    return { user: null, error: "JWT_SECRET not configured" };
+  }
+
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(jwtSecret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+
+    const payload = await verify(token, key);
+    const userId = typeof payload.sub === "string" ? payload.sub : "unknown";
+    const email = typeof payload.email === "string" ? payload.email : undefined;
+    return { user: { id: userId, email }, error: null };
+  } catch (_error) {
+    return { user: null, error: "Invalid token" };
+  }
 }
 
 /**
@@ -59,6 +64,10 @@ export function unauthorizedResponse(message: string = "Unauthorized"): Response
  * For endpoints that require authentication.
  */
 export async function requireAuth(req: Request): Promise<{ user: AuthResult["user"]; response?: Response }> {
+  if (!Deno.env.get("API_AUTH_TOKEN") && !Deno.env.get("JWT_SECRET")) {
+    return { user: { id: "anonymous" } };
+  }
+
   const { user, error } = await validateAuth(req);
   
   if (!user) {

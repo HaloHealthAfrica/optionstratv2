@@ -6,14 +6,14 @@
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { createDbClient } from "../_shared/db-client.ts";
 import { HealthCheckService } from "../_shared/refactored/monitoring/health-check-service.ts";
 import { ContextCache } from "../_shared/refactored/cache/context-cache.ts";
 import { DegradedModeTracker } from "../_shared/refactored/monitoring/degraded-mode-tracker.ts";
 import { defaultConfig } from "../_shared/refactored/core/config.ts";
 
 // Initialize services
-const supabase = createSupabaseClient();
+const supabase = createDbClient();
 const degradedModeTracker = new DegradedModeTracker();
 const startTime = Date.now();
 
@@ -179,3 +179,4 @@ Deno.serve(async (req) => {
     );
   }
 });
+

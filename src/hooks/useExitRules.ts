@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import apiClient from "@/lib/api-client";
 
 export interface ExitRulesConfig {
   id?: string;
@@ -30,65 +30,26 @@ const DEFAULT_CONFIG: ExitRulesConfig = {
 };
 
 async function fetchExitRules(mode: string): Promise<ExitRulesConfig> {
-  const { data, error } = await supabase
-    .from("exit_rules")
-    .select("*")
-    .eq("mode", mode)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  if (error) {
-    console.error("Failed to fetch exit rules:", error);
-    throw error;
-  }
-
-  if (!data) {
+  try {
+    const { data, error } = await apiClient.getExitRules(mode);
+    if (error) {
+      console.warn('Exit rules endpoint not available, using defaults');
+      return { ...DEFAULT_CONFIG, mode };
+    }
+    return (data?.rules as ExitRulesConfig) || { ...DEFAULT_CONFIG, mode };
+  } catch (error) {
+    console.warn('Failed to fetch exit rules, using defaults:', error);
     return { ...DEFAULT_CONFIG, mode };
   }
-
-  return data as ExitRulesConfig;
 }
 
 async function updateExitRules(config: ExitRulesConfig): Promise<void> {
-  const { id, ...updateData } = config;
-  
-  if (id) {
-    // Update existing record
-    const { error } = await supabase
-      .from("exit_rules")
-      .update({
-        profit_target_percent: updateData.profit_target_percent,
-        stop_loss_percent: updateData.stop_loss_percent,
-        trailing_stop_percent: updateData.trailing_stop_percent,
-        min_days_to_expiration: updateData.min_days_to_expiration,
-        max_days_in_trade: updateData.max_days_in_trade,
-        delta_exit_threshold: updateData.delta_exit_threshold,
-        theta_decay_threshold: updateData.theta_decay_threshold,
-        iv_crush_threshold: updateData.iv_crush_threshold,
-      })
-      .eq("id", id);
-
+  try {
+    const { error } = await apiClient.updateExitRules(config.mode, config);
     if (error) throw error;
-  } else {
-    // Insert new record (upsert based on mode)
-    const { error } = await supabase
-      .from("exit_rules")
-      .upsert({
-        mode: updateData.mode,
-        is_active: true,
-        profit_target_percent: updateData.profit_target_percent,
-        stop_loss_percent: updateData.stop_loss_percent,
-        trailing_stop_percent: updateData.trailing_stop_percent,
-        min_days_to_expiration: updateData.min_days_to_expiration,
-        max_days_in_trade: updateData.max_days_in_trade,
-        delta_exit_threshold: updateData.delta_exit_threshold,
-        theta_decay_threshold: updateData.theta_decay_threshold,
-        iv_crush_threshold: updateData.iv_crush_threshold,
-      }, {
-        onConflict: "mode,is_active",
-      });
-
-    if (error) throw error;
+  } catch (error) {
+    console.warn('Exit rules update not available:', error);
+    throw error;
   }
 }
 

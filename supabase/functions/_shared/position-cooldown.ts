@@ -7,7 +7,7 @@
  * 3. Enforcing a minimum cooldown period between trades
  */
 
-import { createSupabaseClient } from "./supabase-client.ts";
+import { createDbClient } from "./db-client.ts";
 
 export interface CooldownConfig {
   /** Minimum seconds between trades on same instrument (default: 180 = 3 minutes) */
@@ -57,7 +57,7 @@ export async function checkPositionCooldown(
   config: Partial<CooldownConfig> = {}
 ): Promise<CooldownResult> {
   const cfg = { ...DEFAULT_CONFIG, ...config };
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   
   // CLOSE actions bypass cooldown - we always want to allow exits
   if (action === 'CLOSE') {
@@ -201,7 +201,7 @@ export async function checkUnderlyingCooldown(
   underlying: string,
   cooldownSeconds: number = 60
 ): Promise<{ approved: boolean; reason: string }> {
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   const cutoff = new Date(Date.now() - cooldownSeconds * 1000).toISOString();
 
   const { data: recentSignals, error } = await supabase
@@ -229,3 +229,4 @@ export async function checkUnderlyingCooldown(
 
   return { approved: true, reason: 'No recent trades' };
 }
+

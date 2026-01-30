@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS refactored_positions (
   exit_time TIMESTAMPTZ,
   realized_pnl DECIMAL(10, 2),
   status VARCHAR(20) NOT NULL CHECK (status IN ('OPEN', 'CLOSED')),
+  underlying VARCHAR(20),
+  strike DECIMAL(10, 2),
+  expiration DATE,
+  option_type VARCHAR(10) CHECK (option_type IN ('CALL', 'PUT')),
+  timeframe VARCHAR(10),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   

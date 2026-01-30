@@ -4,7 +4,7 @@
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { createDbClient } from "../_shared/db-client.ts";
 import { requireAuth } from "../_shared/auth-middleware.ts";
 
 interface PnLSummary {
@@ -56,7 +56,7 @@ Deno.serve(async (req) => {
   if (response) return response;
 
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     const url = new URL(req.url);
     
     const period = url.searchParams.get("period") || "30d"; // 7d, 30d, 90d, all
@@ -256,3 +256,4 @@ Deno.serve(async (req) => {
     );
   }
 });
+

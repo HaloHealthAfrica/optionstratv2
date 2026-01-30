@@ -19,17 +19,45 @@ export class GEXService {
     this.staleWeightReduction = config.gex.staleWeightReduction;
   }
 
+  private normalizeTimeframe(timeframe: string): string {
+    const normalized = timeframe.toLowerCase().trim();
+    const map: Record<string, string> = {
+      '1m': '1m',
+      '3m': '3m',
+      '5m': '5m',
+      '15m': '15m',
+      '30m': '30m',
+      '1h': '60m',
+      '60m': '60m',
+      '4h': '240m',
+      '240m': '240m',
+      '1d': '1d',
+      '1w': '1w',
+    };
+
+    if (map[normalized]) {
+      return map[normalized];
+    }
+
+    if (/^\d+$/.test(normalized)) {
+      return `${normalized}m`;
+    }
+
+    return normalized;
+  }
+
   /**
    * Get latest GEX signal for symbol and timeframe
    * Implements Requirement 11.1
    */
   async getLatestSignal(symbol: string, timeframe: string): Promise<GEXSignal | null> {
+    const normalizedTimeframe = this.normalizeTimeframe(timeframe);
     try {
       const { data, error } = await this.supabaseClient
         .from('refactored_gex_signals')
         .select('*')
         .eq('symbol', symbol)
-        .eq('timeframe', timeframe)
+        .eq('timeframe', normalizedTimeframe)
         .order('timestamp', { ascending: false })
         .limit(1)
         .single();
@@ -101,13 +129,14 @@ export class GEXService {
     currentDirection?: string;
     previousDirection?: string;
   }> {
+    const normalizedTimeframe = this.normalizeTimeframe(timeframe);
     try {
       // Get the two most recent GEX signals
       const { data, error } = await this.supabaseClient
         .from('refactored_gex_signals')
         .select('*')
         .eq('symbol', symbol)
-        .eq('timeframe', timeframe)
+        .eq('timeframe', normalizedTimeframe)
         .order('timestamp', { ascending: false })
         .limit(2);
 

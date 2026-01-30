@@ -1,5 +1,5 @@
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { createDbClient } from "../_shared/db-client.ts";
 import { 
   generateGEXSignals, 
   getPaperTradingStats,
@@ -37,7 +37,7 @@ Deno.serve(async (req) => {
 
     // GET /paper-trading?action=history
     if (action === 'history') {
-      const supabase = createSupabaseClient();
+      const supabase = createDbClient();
       const limit = parseInt(url.searchParams.get('limit') || '50');
       
       const { data: trades, error } = await supabase
@@ -90,7 +90,7 @@ Deno.serve(async (req) => {
       const currentPrice = chain.underlying_price;
 
       // Get previous GEX for flip detection
-      const supabase = createSupabaseClient();
+      const supabase = createDbClient();
       const { data: previousSignal } = await supabase
         .from('gex_signals')
         .select('net_gex, dealer_position')
@@ -159,7 +159,7 @@ Deno.serve(async (req) => {
 
     // GET /paper-trading?action=latest-gex&ticker=SPY
     if (action === 'latest-gex') {
-      const supabase = createSupabaseClient();
+      const supabase = createDbClient();
       
       const { data: signal, error } = await supabase
         .from('gex_signals')
@@ -196,3 +196,4 @@ Deno.serve(async (req) => {
     });
   }
 });
+

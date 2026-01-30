@@ -5,7 +5,6 @@
 // Supports two modes: STRICT (requires full alignment) and WEIGHTED (flexible)
 // ============================================================================
 
-import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { 
   analyzeMultiTimeframe, 
   MultiTimeframeAnalysis,
@@ -350,9 +349,7 @@ function evaluateWeightedMode(
 export async function evaluateMtfAlignment(
   ticker: string,
   originalQuantity: number,
-  config: Partial<MtfFilterConfig> = {},
-  supabaseUrl: string,
-  supabaseKey: string
+  config: Partial<MtfFilterConfig> = {}
 ): Promise<MtfFilterResult> {
   const finalConfig: MtfFilterConfig = { ...DEFAULT_MTF_CONFIG, ...config };
 
@@ -377,9 +374,7 @@ export async function evaluateMtfAlignment(
     // Run MTF analysis
     const analysis = await analyzeMultiTimeframe(
       ticker,
-      finalConfig.lookbackHours,
-      supabaseUrl,
-      supabaseKey
+      finalConfig.lookbackHours
     );
 
     // Handle no signals case

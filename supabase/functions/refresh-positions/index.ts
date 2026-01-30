@@ -6,7 +6,7 @@
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { createDbClient } from "../_shared/db-client.ts";
 import { 
   refreshPositions, 
   capturePortfolioSnapshot,
@@ -28,7 +28,7 @@ Deno.serve(async (req) => {
   const startTime = Date.now();
 
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     const url = new URL(req.url);
     
     // Options
@@ -161,3 +161,4 @@ Deno.serve(async (req) => {
     );
   }
 });
+

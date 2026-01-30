@@ -3,7 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { POLLING_INTERVALS } from "@/lib/polling";
+import apiClient from "@/lib/api-client";
 import { TrendingUp, TrendingDown, Activity, DollarSign } from "lucide-react";
 import {
   LineChart,
@@ -20,8 +21,6 @@ import {
   Legend,
   ReferenceLine,
 } from "recharts";
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
 interface PortfolioSnapshot {
   id: string;
@@ -54,22 +53,9 @@ interface AnalyticsData {
 }
 
 async function fetchAnalytics(period: string): Promise<AnalyticsData> {
-  const url = new URL(`${SUPABASE_URL}/functions/v1/analytics`);
-  url.searchParams.set("period", period);
-  url.searchParams.set("mode", "PAPER");
-
-  const { data: { session } } = await supabase.auth.getSession();
-
-  const response = await fetch(url.toString(), {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-      ...(session?.access_token && { Authorization: `Bearer ${session.access_token}` }),
-    },
-  });
-
-  if (!response.ok) throw new Error("Failed to fetch analytics");
-  return response.json();
+  const { data, error } = await apiClient.getAnalytics(period);
+  if (error || !data) throw error || new Error("Failed to fetch analytics");
+  return data as AnalyticsData;
 }
 
 function formatCurrency(value: number): string {
@@ -94,7 +80,7 @@ export function PerformanceCharts() {
   const { data, isLoading } = useQuery({
     queryKey: ["analytics", period],
     queryFn: () => fetchAnalytics(period),
-    refetchInterval: 60000, // Refresh every minute
+    refetchInterval: POLLING_INTERVALS.performanceCharts,
   });
 
   // Prepare equity curve data

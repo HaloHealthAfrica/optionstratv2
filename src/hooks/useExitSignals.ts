@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import apiClient from "@/lib/api-client";
+import { POLLING_INTERVALS } from "@/lib/polling";
 
 interface ExitEvaluation {
   should_exit: boolean;
@@ -43,34 +44,18 @@ interface ExitSignalsResponse {
 }
 
 export async function fetchExitSignals(refresh = false): Promise<ExitSignalsResponse> {
-  const { data: sessionData } = await supabase.auth.getSession();
-  
-  const url = new URL(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/exit-signals`);
-  if (refresh) {
-    url.searchParams.set('refresh', 'true');
+  const { data, error } = await apiClient.getExitSignals(refresh);
+  if (error || !data) {
+    throw error || new Error('Failed to fetch exit signals');
   }
-  
-  const response = await fetch(url.toString(), {
-    headers: {
-      'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-      'Authorization': sessionData?.session?.access_token 
-        ? `Bearer ${sessionData.session.access_token}`
-        : `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-    },
-  });
-  
-  if (!response.ok) {
-    throw new Error('Failed to fetch exit signals');
-  }
-  
-  return response.json();
+  return data;
 }
 
 export function useExitSignals(refresh = false) {
   return useQuery({
     queryKey: ['exit-signals', refresh],
     queryFn: () => fetchExitSignals(refresh),
-    refetchInterval: 60000, // Refetch every minute
+    refetchInterval: POLLING_INTERVALS.exitSignals,
     staleTime: 30000,
   });
 }

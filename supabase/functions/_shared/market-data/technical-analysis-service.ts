@@ -277,12 +277,27 @@ export class TechnicalAnalysisService {
    * Parse time string like "01:30:00" to minutes
    */
   private parseTimeString(timeStr: string): number | null {
-    const match = timeStr.match(/^(\d+):(\d+):(\d+)$/);
-    if (!match) return null;
-    
-    const hours = parseInt(match[1], 10);
-    const minutes = parseInt(match[2], 10);
-    return hours * 60 + minutes;
+    const trimmed = timeStr.trim();
+
+    if (/^\d+(\.\d+)?$/.test(trimmed)) {
+      return Math.round(parseFloat(trimmed));
+    }
+
+    const hmsMatch = trimmed.match(/^(\d+):(\d+):(\d+)$/);
+    if (hmsMatch) {
+      const hours = parseInt(hmsMatch[1], 10);
+      const minutes = parseInt(hmsMatch[2], 10);
+      return hours * 60 + minutes;
+    }
+
+    const hmMatch = trimmed.match(/^(\d+):(\d+)$/);
+    if (hmMatch) {
+      const hours = parseInt(hmMatch[1], 10);
+      const minutes = parseInt(hmMatch[2], 10);
+      return hours * 60 + minutes;
+    }
+
+    return null;
   }
   
   /**

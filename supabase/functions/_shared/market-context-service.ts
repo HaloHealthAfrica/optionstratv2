@@ -3,7 +3,7 @@
  * Provides access to latest market context data for decision engine
  */
 
-import { createSupabaseClient } from "./supabase-client.ts";
+import { createDbClient } from "./db-client.ts";
 import type { 
   MarketContextRecord, 
   MarketContextForDecision,
@@ -18,7 +18,7 @@ const CONTEXT_STALE_THRESHOLD_MS = 5 * 60 * 1000;
  */
 export async function getLatestContext(ticker: string): Promise<MarketContextForDecision | null> {
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     
     const { data, error } = await supabase
       .from('market_context')
@@ -56,7 +56,7 @@ export async function getLatestContextBatch(tickers: string[]): Promise<Map<stri
   }
 
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     
     // Use the view for latest context per ticker
     const { data, error } = await supabase
@@ -145,7 +145,7 @@ function transformToDecisionContext(record: MarketContextRecord): MarketContextF
  */
 export async function saveContext(payload: ContextWebhookPayload): Promise<{ id: string } | null> {
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     
     const record = {
       ticker: payload.ticker.toUpperCase(),
@@ -254,7 +254,7 @@ export async function saveContext(payload: ContextWebhookPayload): Promise<{ id:
  */
 export async function cleanupOldContext(): Promise<number> {
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     const cutoffTime = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     
     const { data, error } = await supabase
@@ -279,3 +279,4 @@ export async function cleanupOldContext(): Promise<number> {
     return 0;
   }
 }
+

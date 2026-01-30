@@ -5,7 +5,7 @@
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { createDbClient } from "../_shared/db-client.ts";
 import { getCurrentTradingMode, isBrokerConfigured, validateSafetyGates } from "../_shared/broker-adapter.ts";
 
 interface OrderStatusUpdate {
@@ -168,7 +168,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     const safetyGates = validateSafetyGates();
     
     // Only poll in LIVE mode
@@ -186,7 +186,7 @@ Deno.serve(async (req) => {
     // Fetch pending orders with broker_order_id
     const { data: pendingOrders, error: fetchError } = await supabase
       .from('orders')
-      .select('id, broker_order_id, mode')
+      .select('id, broker_order_id, mode, refactored_position_id, exit_action, exit_quantity')
       .eq('mode', 'LIVE')
       .in('status', ['PENDING', 'PARTIAL', 'SUBMITTED'])
       .not('broker_order_id', 'is', null);
@@ -288,6 +288,45 @@ Deno.serve(async (req) => {
             option_type: orderDetails.option_type,
             executed_at: new Date().toISOString(),
           });
+
+          if (orderDetails.refactored_position_id) {
+            const { data: refactoredPosition } = await supabase
+              .from('refactored_positions')
+              .select('*')
+              .eq('id', orderDetails.refactored_position_id)
+              .single();
+
+            if (refactoredPosition) {
+              const exitQuantity = orderDetails.exit_quantity || update.filled_quantity;
+              const realized = (update.avg_fill_price - refactoredPosition.entry_price) * exitQuantity * 100;
+              const remainingQty = Math.max(0, refactoredPosition.quantity - exitQuantity);
+
+              if (orderDetails.exit_action === 'PARTIAL' && remainingQty > 0) {
+                await supabase
+                  .from('refactored_positions')
+                  .update({
+                    quantity: remainingQty,
+                    realized_pnl: (refactoredPosition.realized_pnl ?? 0) + realized,
+                    current_price: update.avg_fill_price,
+                    updated_at: new Date().toISOString(),
+                    status: 'OPEN',
+                  })
+                  .eq('id', orderDetails.refactored_position_id);
+              } else {
+                await supabase
+                  .from('refactored_positions')
+                  .update({
+                    status: 'CLOSED',
+                    exit_price: update.avg_fill_price,
+                    exit_time: new Date().toISOString(),
+                    realized_pnl: (refactoredPosition.realized_pnl ?? 0) + realized,
+                    current_price: update.avg_fill_price,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq('id', orderDetails.refactored_position_id);
+              }
+            }
+          }
         }
       }
     }
@@ -318,3 +357,4 @@ Deno.serve(async (req) => {
     );
   }
 });
+

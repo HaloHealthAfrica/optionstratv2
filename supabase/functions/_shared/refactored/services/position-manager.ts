@@ -36,6 +36,15 @@ export class PositionManager {
         };
       }
 
+      const parsedSignal = signal.metadata?.parsed_signal as Record<string, unknown> | undefined;
+      const strike = typeof parsedSignal?.strike === 'number' ? parsedSignal.strike : undefined;
+      const expiration = typeof parsedSignal?.expiration === 'string' ? parsedSignal.expiration : undefined;
+      const optionType = typeof parsedSignal?.option_type === 'string'
+        ? (parsedSignal.option_type as 'CALL' | 'PUT')
+        : undefined;
+      const underlying = typeof parsedSignal?.underlying === 'string' ? parsedSignal.underlying : signal.symbol;
+      const timeframe = typeof signal.timeframe === 'string' ? signal.timeframe : undefined;
+
       // Create position with all required fields (Requirement 14.1)
       const position: Position = {
         id: this.generatePositionId(),
@@ -46,6 +55,11 @@ export class PositionManager {
         entryPrice,
         entryTime: new Date(),
         status: 'OPEN',
+        underlying,
+        strike,
+        expiration,
+        optionType,
+        timeframe,
       };
 
       // Persist to database immediately (Requirement 14.2)
@@ -60,6 +74,11 @@ export class PositionManager {
           entry_price: position.entryPrice,
           entry_time: position.entryTime.toISOString(),
           status: position.status,
+          underlying: position.underlying ?? null,
+          strike: position.strike ?? null,
+          expiration: position.expiration ?? null,
+          option_type: position.optionType ?? null,
+          timeframe: position.timeframe ?? null,
         });
 
       if (dbError) {
@@ -321,6 +340,11 @@ export class PositionManager {
             currentPrice: row.current_price,
             unrealizedPnL: row.unrealized_pnl,
             status: row.status,
+            underlying: row.underlying ?? undefined,
+            strike: row.strike ?? undefined,
+            expiration: row.expiration ?? undefined,
+            optionType: row.option_type ?? undefined,
+            timeframe: row.timeframe ?? undefined,
           };
 
           this.positions.set(position.id, position);

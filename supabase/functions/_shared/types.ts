@@ -48,6 +48,9 @@ export interface Signal {
 export interface Order {
   id: string;
   signal_id: string | null;
+  refactored_position_id?: string | null;
+  exit_action?: 'PARTIAL' | 'FULL' | null;
+  exit_quantity?: number | null;
   broker_order_id: string | null;
   client_order_id: string;
   underlying: string;

@@ -3,7 +3,7 @@
  * Decision logging and rule performance tracking for learning
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createDbClient } from "../db-client.ts";
 import type {
   DecisionLog,
   RuleTrigger,
@@ -11,19 +11,13 @@ import type {
   TuneDirection,
 } from './types.ts';
 
-const createSupabaseClient = () => {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  return createClient(supabaseUrl, supabaseServiceKey);
-};
-
 /**
  * Log a decision with full context for replay
  */
 export async function logDecision(log: DecisionLog): Promise<string> {
-  const supabase = createSupabaseClient();
+  const db = createDbClient();
   
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('decision_log')
     .insert({
       decision_type: log.decisionType,
@@ -44,9 +38,7 @@ export async function logDecision(log: DecisionLog): Promise<string> {
       quantity: log.quantity ?? null,
       price: log.price ?? null,
       rules_triggered: log.rulesTriggered,
-    })
-    .select('id')
-    .single();
+    });
   
   if (error) {
     console.error('[Observability] Error logging decision:', error);
@@ -58,7 +50,7 @@ export async function logDecision(log: DecisionLog): Promise<string> {
     await incrementRuleHit(rule.ruleId);
   }
   
-  return data.id;
+  return data?.id ?? '';
 }
 
 /**
@@ -69,10 +61,10 @@ export async function updateDecisionOutcome(
   pnl: number,
   wasCorrect: boolean
 ): Promise<void> {
-  const supabase = createSupabaseClient();
+  const db = createDbClient();
   
   // Update the decision outcome
-  await supabase
+  await db
     .from('decision_log')
     .update({
       outcome_pnl: pnl,
@@ -82,11 +74,11 @@ export async function updateDecisionOutcome(
     .eq('id', decisionId);
   
   // Get rules that were triggered and update their accuracy
-  const { data: decision } = await supabase
+  const { data: decision } = await db
     .from('decision_log')
     .select('rules_triggered')
     .eq('id', decisionId)
-    .maybeSingle();
+    .single();
   
   if (decision?.rules_triggered && Array.isArray(decision.rules_triggered)) {
     for (const rule of decision.rules_triggered as RuleTrigger[]) {
@@ -99,16 +91,16 @@ export async function updateDecisionOutcome(
  * Increment rule hit count
  */
 async function incrementRuleHit(ruleId: string): Promise<void> {
-  const supabase = createSupabaseClient();
+  const db = createDbClient();
   
-  const { data: current } = await supabase
+  const { data: current } = await db
     .from('rule_performance')
     .select('times_triggered')
     .eq('rule_id', ruleId)
-    .maybeSingle();
+    .single();
   
   if (current) {
-    await supabase
+    await db
       .from('rule_performance')
       .update({ 
         times_triggered: (current.times_triggered ?? 0) + 1,
@@ -116,7 +108,7 @@ async function incrementRuleHit(ruleId: string): Promise<void> {
       })
       .eq('rule_id', ruleId);
   } else {
-    await supabase.from('rule_performance').insert({
+    await db.from('rule_performance').insert({
       rule_id: ruleId,
       times_triggered: 1,
     });
@@ -131,13 +123,13 @@ async function updateRuleAccuracy(
   wasCorrect: boolean,
   pnl: number
 ): Promise<void> {
-  const supabase = createSupabaseClient();
+  const db = createDbClient();
   
-  const { data: current } = await supabase
+  const { data: current } = await db
     .from('rule_performance')
     .select('*')
     .eq('rule_id', ruleId)
-    .maybeSingle();
+    .single();
   
   if (!current) return;
   
@@ -173,7 +165,7 @@ async function updateRuleAccuracy(
       ? currentThreshold * 0.8
       : currentThreshold;
   
-  await supabase
+  await db
     .from('rule_performance')
     .update({
       times_correct: newTimesCorrect,
@@ -191,9 +183,9 @@ async function updateRuleAccuracy(
  * Get tuning recommendations for all rules
  */
 export async function getRuleTuningRecommendations(): Promise<TuningRecommendation[]> {
-  const supabase = createSupabaseClient();
+  const db = createDbClient();
   
-  const { data } = await supabase
+  const { data } = await db
     .from('rule_performance')
     .select('*')
     .gte('times_triggered', 20) // Only rules with enough data
@@ -220,9 +212,9 @@ export async function getRecentDecisions(
   ticker: string,
   limit: number = 50
 ): Promise<DecisionLog[]> {
-  const supabase = createSupabaseClient();
+  const db = createDbClient();
   
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('decision_log')
     .select('*')
     .eq('ticker', ticker)
@@ -260,13 +252,13 @@ export async function getRecentDecisions(
  * Get decision by ID for replay
  */
 export async function getDecisionById(decisionId: string): Promise<DecisionLog | null> {
-  const supabase = createSupabaseClient();
+  const db = createDbClient();
   
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('decision_log')
     .select('*')
     .eq('id', decisionId)
-    .maybeSingle();
+    .single();
   
   if (error || !data) return null;
   

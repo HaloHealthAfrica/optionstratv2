@@ -27,35 +27,26 @@ Deno.serve(async (req) => {
     const lookbackHours = parseInt(url.searchParams.get("lookback") || "24");
     const testQuantity = parseInt(url.searchParams.get("quantity") || "10");
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
     console.log(`MTF Comparison for ${ticker}...`);
 
     // Get base analysis
     const analysis = await analyzeMultiTimeframe(
       ticker,
-      lookbackHours,
-      supabaseUrl,
-      supabaseKey
+      lookbackHours
     );
 
     // Evaluate in STRICT mode
     const strictResult = await evaluateMtfAlignment(
       ticker,
       testQuantity,
-      { ...DEFAULT_MTF_CONFIG, mode: 'STRICT' },
-      supabaseUrl,
-      supabaseKey
+      { ...DEFAULT_MTF_CONFIG, mode: 'STRICT' }
     );
 
     // Evaluate in WEIGHTED mode
     const weightedResult = await evaluateMtfAlignment(
       ticker,
       testQuantity,
-      { ...DEFAULT_MTF_CONFIG, mode: 'WEIGHTED' },
-      supabaseUrl,
-      supabaseKey
+      { ...DEFAULT_MTF_CONFIG, mode: 'WEIGHTED' }
     );
 
     const formatResult = (r: MtfFilterResult) => ({

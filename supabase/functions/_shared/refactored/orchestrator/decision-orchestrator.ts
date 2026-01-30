@@ -45,8 +45,18 @@ export class DecisionOrchestrator {
   ): Promise<EntryDecision> {
     const reasoning: string[] = [];
     let gexSignal: GEXSignal | null = null;
+    const indicatorContext = this.evaluateIndicatorContext(signal);
     
     try {
+      if (indicatorContext.rejectionReason) {
+        reasoning.push(`Indicator context rejected: ${indicatorContext.rejectionReason}`);
+        return this.createRejectionDecision(signal, indicatorContext.rejectionReason, reasoning);
+      }
+
+      if (indicatorContext.warnings.length > 0) {
+        reasoning.push(`Indicator warnings: ${indicatorContext.warnings.join('; ')}`);
+      }
+
       // Step 1: Fetch context data with timeout (Requirement 8.1)
       reasoning.push('Fetching market context data...');
       let context: ContextData;
@@ -120,18 +130,25 @@ export class DecisionOrchestrator {
       const confluenceBoost = confluenceScore >= 0.7 ? 10 : 0;
       reasoning.push(`Confluence: ${confluenceScore.toFixed(2)} (boost: ${confluenceBoost})`);
 
-      // Step 8: Calculate final confidence with ordered adjustments (Requirement 6.3)
+      // Step 8: Apply indicator-specific adjustments
+      const indicatorAdjustment = indicatorContext.confidenceDelta;
+      if (indicatorAdjustment !== 0) {
+        reasoning.push(`Indicator adjustment: ${indicatorAdjustment.toFixed(1)}`);
+      }
+
+      // Step 9: Calculate final confidence with ordered adjustments (Requirement 6.3)
       let confidence = baseConfidence;
       confidence += contextAdjustment;
       confidence += positioningAdjustment;
       confidence += gexAdjustment;
       confidence += confluenceBoost;
+      confidence += indicatorAdjustment;
 
-      // Step 9: Clamp confidence to [0, 100] (Requirement 6.5)
+      // Step 10: Clamp confidence to [0, 100] (Requirement 6.5)
       const finalConfidence = Math.max(0, Math.min(100, confidence));
       reasoning.push(`Final confidence: ${finalConfidence} (clamped from ${confidence.toFixed(1)})`);
 
-      // Step 10: Calculate position size
+      // Step 11: Calculate position size
       reasoning.push('Calculating position size...');
       const sizingResult = this.positionSizingService.calculateSize(
         signal,
@@ -147,15 +164,21 @@ export class DecisionOrchestrator {
         reasoning.push(`Position size reduced by VIX: ${sizingResult.size} → ${finalSize}`);
       }
 
+      if (indicatorContext.sizeMultiplier !== 1) {
+        const adjustedSize = Math.floor(finalSize * indicatorContext.sizeMultiplier);
+        reasoning.push(`Indicator size multiplier ${indicatorContext.sizeMultiplier.toFixed(2)}: ${finalSize} → ${adjustedSize}`);
+        finalSize = adjustedSize;
+      }
+
       reasoning.push(`Position size: ${finalSize} contracts`);
 
-      // Step 11: Check if size meets minimum threshold
+      // Step 12: Check if size meets minimum threshold
       if (finalSize < this.config.sizing.minSize) {
         reasoning.push(`Position size ${finalSize} below minimum ${this.config.sizing.minSize} - rejecting`);
         return this.createRejectionDecision(signal, 'Position size below minimum', reasoning, context, gexSignal);
       }
 
-      // Step 12: Check exposure limits
+      // Step 13: Check exposure limits
       const positionValue = signal.metadata?.price || 100; // Use signal price or default
       const additionalExposure = positionValue * finalSize * 100;
       
@@ -164,7 +187,7 @@ export class DecisionOrchestrator {
         return this.createRejectionDecision(signal, 'Maximum exposure exceeded', reasoning, context, gexSignal);
       }
 
-      // Step 13: Return ENTER decision
+      // Step 14: Return ENTER decision
       reasoning.push('All checks passed - ENTER decision');
 
       const entryDecision: EntryDecision = {
@@ -177,12 +200,14 @@ export class DecisionOrchestrator {
           baseConfidence,
           contextAdjustment,
           positioningAdjustment,
+          indicatorAdjustment,
           gexAdjustment: gexAdjustment + confluenceBoost,
           finalConfidence,
           baseSizing: sizingResult.calculation.baseSize,
           kellyMultiplier: sizingResult.calculation.kellyMultiplier,
           regimeMultiplier: sizingResult.calculation.regimeMultiplier,
           confluenceMultiplier: sizingResult.calculation.confluenceMultiplier,
+          indicatorSizeMultiplier: indicatorContext.sizeMultiplier,
           finalSize,
         },
       };
@@ -222,12 +247,14 @@ export class DecisionOrchestrator {
         baseConfidence: 0,
         contextAdjustment: 0,
         positioningAdjustment: 0,
+          indicatorAdjustment: 0,
         gexAdjustment: 0,
         finalConfidence: 0,
         baseSizing: 0,
         kellyMultiplier: 0,
         regimeMultiplier: 0,
         confluenceMultiplier: 0,
+          indicatorSizeMultiplier: 1,
         finalSize: 0,
       },
     };
@@ -451,6 +478,123 @@ export class DecisionOrchestrator {
     return {
       hours: Number(hourPart),
       minutes: Number(minutePart),
+    };
+  }
+
+  private evaluateIndicatorContext(signal: Signal): {
+    confidenceDelta: number;
+    sizeMultiplier: number;
+    rejectionReason?: string;
+    warnings: string[];
+  } {
+    const warnings: string[] = [];
+    let confidenceDelta = 0;
+    let sizeMultiplier = 1;
+
+    const indicatorSource = (signal.metadata?.indicator_source || '').toString();
+    const direction = signal.direction === 'CALL' ? 'BULLISH' : 'BEARISH';
+
+    // Freshness rules
+    const ageSeconds = (Date.now() - signal.timestamp.getTime()) / 1000;
+    if (indicatorSource && indicatorSource !== 'mtf-trend-dots' && ageSeconds > 60) {
+      return {
+        confidenceDelta,
+        sizeMultiplier,
+        rejectionReason: `Trigger signal too old (${Math.round(ageSeconds)}s)`,
+        warnings,
+      };
+    }
+
+    if (indicatorSource === 'mtf-trend-dots') {
+      return {
+        confidenceDelta,
+        sizeMultiplier,
+        rejectionReason: 'Confirmation-only signal (MTF Trend Dots)',
+        warnings,
+      };
+    }
+
+    if (indicatorSource === 'ultimate-option') {
+      const score = Number(signal.metadata?.original_score ?? signal.metadata?.score ?? 0);
+      const components = Array.isArray(signal.metadata?.components)
+        ? signal.metadata.components
+        : [];
+      const componentCount = components.length;
+      const positionMultiplier = Number(signal.metadata?.position_multiplier ?? 1);
+
+      if (score < 4) {
+        return {
+          confidenceDelta,
+          sizeMultiplier,
+          rejectionReason: `Ultimate Option score too low (${score})`,
+          warnings,
+        };
+      }
+
+      if (score >= 7 && componentCount >= 4) {
+        confidenceDelta += 10;
+        sizeMultiplier *= positionMultiplier > 0 ? positionMultiplier : 1.25;
+      } else if (score >= 5.5 && components.includes('MTF_ALIGN')) {
+        confidenceDelta += 5;
+      } else if (score >= 4 && componentCount <= 2) {
+        sizeMultiplier *= 0.5;
+        warnings.push('Weak confluence components for Ultimate Option');
+      }
+    }
+
+    if (indicatorSource === 'strat-engine' || indicatorSource === 'strat_engine_v6') {
+      const confidence = Number(signal.metadata?.confidence ?? 0);
+      const session = (signal.metadata?.session || '').toString().toUpperCase();
+
+      if (confidence < 2) {
+        return {
+          confidenceDelta,
+          sizeMultiplier,
+          rejectionReason: `STRAT confidence too low (${confidence})`,
+          warnings,
+        };
+      }
+
+      if (confidence <= 3) {
+        sizeMultiplier *= 0.5;
+      } else if (confidence === 6 && session === 'ACTIVE') {
+        sizeMultiplier *= 1.25;
+      }
+
+      if (session === 'NY_LUNCH') {
+        sizeMultiplier *= 0.8;
+        warnings.push('STRAT signal during NY lunch session');
+      }
+    }
+
+    const alignmentScore = Number(signal.metadata?.alignment_score ?? signal.metadata?.alignmentScore ?? 0);
+    const mtfBias = (signal.metadata?.bias ??
+      signal.metadata?.mtf_bias ??
+      signal.metadata?.mtf_bias_1h ??
+      signal.metadata?.mtf_bias_4h ??
+      signal.metadata?.mtf_bias_1H ??
+      signal.metadata?.mtf_bias_4H) as string | undefined;
+
+    if (alignmentScore > 0 && mtfBias) {
+      const mtfDirection = mtfBias.toUpperCase().includes('BULL') ? 'BULLISH'
+        : mtfBias.toUpperCase().includes('BEAR') ? 'BEARISH'
+        : 'NEUTRAL';
+
+      if (alignmentScore > 60 && mtfDirection === direction) {
+        confidenceDelta += 20;
+      } else if (alignmentScore > 70 && mtfDirection !== 'NEUTRAL' && mtfDirection !== direction) {
+        sizeMultiplier *= 0.5;
+        warnings.push('Counter-trend vs strong MTF alignment');
+      } else if (alignmentScore < 40) {
+        sizeMultiplier *= 0.5;
+        warnings.push('Choppy MTF alignment');
+      }
+    }
+
+    return {
+      confidenceDelta,
+      sizeMultiplier,
+      warnings,
     };
   }
 }

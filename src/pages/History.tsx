@@ -20,8 +20,8 @@ import {
   Filter,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
+import apiClient from "@/lib/api-client";
 import { 
   LineChart, 
   Line, 
@@ -37,8 +37,6 @@ import {
   Cell,
 } from "recharts";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
 interface Trade {
   id: string;
@@ -96,43 +94,19 @@ interface Analytics {
 }
 
 async function fetchTrades(underlying?: string, limit = 50) {
-  const url = new URL(`${SUPABASE_URL}/functions/v1/trades`);
-  url.searchParams.set("limit", limit.toString());
-  url.searchParams.set("analytics", "true");
-  if (underlying && underlying !== "all") {
-    url.searchParams.set("underlying", underlying);
-  }
-
-  const { data: { session } } = await supabase.auth.getSession();
-  
-  const response = await fetch(url.toString(), {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-      ...(session?.access_token && { "Authorization": `Bearer ${session.access_token}` }),
-    },
+  const { data, error } = await apiClient.getTrades({
+    limit,
+    includeAnalytics: true,
+    underlying: underlying && underlying !== "all" ? underlying : undefined,
   });
-
-  if (!response.ok) throw new Error("Failed to fetch trades");
-  return response.json();
+  if (error || !data) throw error || new Error("Failed to fetch trades");
+  return data;
 }
 
 async function fetchAnalytics(period = "30d") {
-  const url = new URL(`${SUPABASE_URL}/functions/v1/analytics`);
-  url.searchParams.set("period", period);
-
-  const { data: { session } } = await supabase.auth.getSession();
-  
-  const response = await fetch(url.toString(), {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-      ...(session?.access_token && { "Authorization": `Bearer ${session.access_token}` }),
-    },
-  });
-
-  if (!response.ok) throw new Error("Failed to fetch analytics");
-  return response.json() as Promise<Analytics>;
+  const { data, error } = await apiClient.getAnalytics(period);
+  if (error || !data) throw error || new Error("Failed to fetch analytics");
+  return data as Analytics;
 }
 
 const COLORS = ['hsl(var(--primary))', 'hsl(var(--secondary))', 'hsl(var(--accent))', '#8884d8', '#82ca9d'];

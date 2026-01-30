@@ -8,7 +8,7 @@
  * Based on analysis: 48% of rejections were time-based (pre/after-market)
  */
 
-import { createSupabaseClient } from "./supabase-client.ts";
+import { createDbClient } from "./db-client.ts";
 import type { IncomingSignal } from "./types.ts";
 import type { MarketSession } from "./market-filters.ts";
 import { getCurrentMarketSession } from "./market-filters.ts";
@@ -257,3 +257,4 @@ export async function processQueuedSignals(): Promise<{
   
   return { processed, errors };
 }
+

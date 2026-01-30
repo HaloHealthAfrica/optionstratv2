@@ -5,7 +5,7 @@
  * Coordinates all six trading services into a deterministic, explainable decision engine.
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createDbClient } from "../db-client.ts";
 import type {
   OrchestratorConfig,
   OrchestratorEntryInput,
@@ -62,10 +62,7 @@ import { logDecision, updateDecisionOutcome } from '../observability/observabili
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getSupabaseClient(): any {
-  return createClient(
-    Deno.env.get('SUPABASE_URL') || '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
-  );
+  return createDbClient();
 }
 
 function mergeConfig(overrides?: Partial<OrchestratorConfig>): OrchestratorConfig {

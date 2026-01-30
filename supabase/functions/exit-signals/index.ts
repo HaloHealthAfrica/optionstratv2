@@ -6,7 +6,7 @@
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { createDbClient } from "../_shared/db-client.ts";
 import { evaluateExitRules, type ExitRuleConfig, type ExitEvaluation } from "../_shared/exit-rules.ts";
 import { getMarketDataService } from "../_shared/market-data/index.ts";
 import { requireAuth } from "../_shared/auth-middleware.ts";
@@ -101,7 +101,7 @@ Deno.serve(async (req) => {
   const startTime = Date.now();
 
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     const marketDataService = getMarketDataService();
     const url = new URL(req.url);
     
@@ -272,3 +272,4 @@ Deno.serve(async (req) => {
     );
   }
 });
+

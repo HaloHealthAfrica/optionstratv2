@@ -1,6 +1,4 @@
-import { supabase } from "@/integrations/supabase/client";
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+import apiClient from "@/lib/api-client";
 
 export interface SystemStats {
   signals: {
@@ -192,28 +190,10 @@ export interface Order {
 }
 
 async function callEdgeFunction<T>(functionName: string, params?: Record<string, string>): Promise<T> {
-  const url = new URL(`${SUPABASE_URL}/functions/v1/${functionName}`);
-  if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      url.searchParams.append(key, value);
-    });
-  }
-
-  const { data: { session } } = await supabase.auth.getSession();
-  
-  const response = await fetch(url.toString(), {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-      ...(session?.access_token && { "Authorization": `Bearer ${session.access_token}` }),
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-
-  return response.json();
+  const query = params ? `?${new URLSearchParams(params).toString()}` : "";
+  const { data, error } = await apiClient.request<T>(`/${functionName}${query}`, { method: "GET" });
+  if (error || !data) throw error || new Error("API error");
+  return data;
 }
 
 export async function fetchStats(): Promise<SystemStats> {
@@ -229,34 +209,19 @@ export async function fetchPositions(showClosed = false): Promise<PositionsRespo
 }
 
 export async function fetchSignals(): Promise<Signal[]> {
-  const { data, error } = await supabase
-    .from("refactored_signals")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(50);
-  
-  if (error) throw error;
-  return data as Signal[];
+  const { data, error } = await apiClient.getSignals({ limit: 50 });
+  if (error || !data) throw error || new Error("Failed to fetch signals");
+  return ((data as any).signals || data) as Signal[];
 }
 
 export async function fetchOrders(): Promise<Order[]> {
-  const { data, error } = await supabase
-    .from("orders")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(50);
-  
-  if (error) throw error;
-  return data as Order[];
+  const { data, error } = await apiClient.getOrders({ limit: 50 });
+  if (error || !data) throw error || new Error("Failed to fetch orders");
+  return ((data as any).orders || data) as Order[];
 }
 
 export async function fetchRiskViolations() {
-  const { data, error } = await supabase
-    .from("risk_violations")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(20);
-  
-  if (error) throw error;
-  return data;
+  const { data, error } = await apiClient.request<any>(`/risk-violations?limit=20`, { method: "GET" });
+  if (error || !data) throw error || new Error("Failed to fetch risk violations");
+  return (data as any).violations || data;
 }

@@ -4,7 +4,7 @@
  * Dynamic position sizing using Kelly Criterion and VIX-based scaling.
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { createDbClient } from "../db-client.ts";
 import type {
   KellySizing,
   VixSizing,
@@ -52,7 +52,7 @@ export function getVixLevel(vix: number): VixLevel {
  * Get Kelly-based sizing from historical regime performance
  */
 export async function getKellySizing(
-  supabase: ReturnType<typeof createClient>,
+  supabase: ReturnType<typeof createDbClient>,
   regime: string,
   dealerPosition: string
 ): Promise<KellySizing> {
@@ -61,7 +61,7 @@ export async function getKellySizing(
     .select('*')
     .eq('regime', regime)
     .eq('dealer_position', dealerPosition)
-    .maybeSingle() as { data: RegimePerformanceRow | null; error: any };
+    .single() as { data: RegimePerformanceRow | null; error: any };
   
   if (error) {
     console.error('[PositionSizing] Error fetching regime performance:', error);
@@ -99,7 +99,7 @@ export async function getKellySizing(
  * Get VIX-based sizing multiplier from rules table
  */
 export async function getVixSizing(
-  supabase: ReturnType<typeof createClient>,
+  supabase: ReturnType<typeof createDbClient>,
   currentVix: number
 ): Promise<VixSizing> {
   const { data, error } = await supabase
@@ -107,7 +107,7 @@ export async function getVixSizing(
     .select('*')
     .lte('vix_min', currentVix)
     .gt('vix_max', currentVix)
-    .maybeSingle() as { data: VixSizingRuleRow | null; error: any };
+    .single() as { data: VixSizingRuleRow | null; error: any };
   
   if (error) {
     console.error('[PositionSizing] Error fetching VIX sizing rules:', error);
@@ -135,7 +135,7 @@ export async function getVixSizing(
  * Calculate dynamic position size with all factors
  */
 export async function calculatePositionSize(
-  supabase: ReturnType<typeof createClient>,
+  supabase: ReturnType<typeof createDbClient>,
   input: PositionSizingInput
 ): Promise<PositionSizeCalculation> {
   const {
@@ -259,7 +259,7 @@ export async function calculatePositionSize(
  * Call this from the position closing logic
  */
 export async function updateRegimePerformance(
-  supabase: ReturnType<typeof createClient>,
+  supabase: ReturnType<typeof createDbClient>,
   regime: string,
   dealerPosition: string,
   pnl: number,
@@ -271,7 +271,7 @@ export async function updateRegimePerformance(
     .select('*')
     .eq('regime', regime)
     .eq('dealer_position', dealerPosition)
-    .maybeSingle() as { data: RegimePerformanceRow | null; error: any };
+    .single() as { data: RegimePerformanceRow | null; error: any };
   
   if (fetchError) {
     console.error('[PositionSizing] Error fetching regime performance:', fetchError);
@@ -360,7 +360,7 @@ export async function updateRegimePerformance(
  * Get all VIX sizing rules (for display/configuration)
  */
 export async function getVixSizingRules(
-  supabase: ReturnType<typeof createClient>
+  supabase: ReturnType<typeof createDbClient>
 ): Promise<VixSizingRuleRow[]> {
   const { data, error } = await supabase
     .from('vix_sizing_rules')
@@ -379,7 +379,7 @@ export async function getVixSizingRules(
  * Get all regime performance stats (for display/analysis)
  */
 export async function getRegimePerformanceStats(
-  supabase: ReturnType<typeof createClient>
+  supabase: ReturnType<typeof createDbClient>
 ): Promise<RegimePerformanceRow[]> {
   const { data, error } = await supabase
     .from('regime_performance')
@@ -393,3 +393,5 @@ export async function getRegimePerformanceStats(
   
   return data || [];
 }
+
+

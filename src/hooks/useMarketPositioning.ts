@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { POLLING_INTERVALS } from "@/lib/polling";
+import apiClient from "@/lib/api-client";
 
 export interface MarketPositioning {
   underlying: string;
@@ -61,25 +63,13 @@ export function useMarketPositioning(underlying: string, expiration: string, ena
   return useQuery({
     queryKey: ['market-positioning', underlying, expiration],
     queryFn: async (): Promise<MarketPositioning> => {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/market-positioning?underlying=${underlying}&expiration=${expiration}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch positioning: ${response.statusText}`);
-      }
-      
-      return response.json();
+      const { data, error } = await apiClient.getMarketPositioning(underlying, expiration);
+      if (error || !data) throw error || new Error('Failed to fetch positioning');
+      return data;
     },
     enabled: enabled && !!underlying && !!expiration,
     staleTime: 60 * 1000, // 1 minute
-    refetchInterval: 5 * 60 * 1000, // Refresh every 5 minutes
+    refetchInterval: POLLING_INTERVALS.marketPositioning,
   });
 }
 
@@ -87,26 +77,14 @@ export function useQuickPositioningBias(underlying: string, expiration: string, 
   return useQuery({
     queryKey: ['market-positioning-quick', underlying, expiration],
     queryFn: async () => {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/market-positioning?underlying=${underlying}&expiration=${expiration}&quick=true`,
-        {
-          headers: {
-            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch positioning: ${response.statusText}`);
-      }
-      
-      return response.json() as Promise<{
+      const { data, error } = await apiClient.getMarketPositioning(underlying, expiration, true);
+      if (error || !data) throw error || new Error('Failed to fetch positioning');
+      return data as {
         bias: 'STRONGLY_BULLISH' | 'BULLISH' | 'NEUTRAL' | 'BEARISH' | 'STRONGLY_BEARISH';
         confidence: number;
         max_pain_strike?: number;
         pc_ratio?: number;
-      }>;
+      };
     },
     enabled: enabled && !!underlying && !!expiration,
     staleTime: 30 * 1000,

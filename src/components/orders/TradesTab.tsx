@@ -21,7 +21,8 @@ import {
   Receipt
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import apiClient from "@/lib/api-client";
+import { POLLING_INTERVALS } from "@/lib/polling";
 import { format } from "date-fns";
 
 interface Trade {
@@ -51,54 +52,24 @@ export function TradesTab() {
   const [sideFilter, setSideFilter] = useState<string>("all");
   const queryClient = useQueryClient();
   
-  // Direct database query for trade data
+  // Fetch trades from API
   const { data: trades, isLoading, error } = useQuery({
     queryKey: ["trades", sideFilter],
     queryFn: async (): Promise<Trade[]> => {
-      const { data, error } = await supabase
-        .from("trades")
-        .select(`
-          *,
-          orders!inner (
-            side,
-            mode,
-            order_type,
-            signal_id
-          )
-        `)
-        .order("executed_at", { ascending: false })
-        .limit(200);
-      
-      if (error) throw error;
-      
-      // Flatten the joined data
-      return (data || []).map(t => ({
-        ...t,
-        side: t.orders?.side,
-        mode: t.orders?.mode,
-        order_type: t.orders?.order_type,
-        signal_id: t.orders?.signal_id,
-      })) as Trade[];
+      const { data, error } = await apiClient.getTrades({ limit: 200 });
+      if (error || !data) throw error || new Error('Failed to fetch trades');
+      return (data as any).trades || data;
     },
-    refetchInterval: 10000,
+    refetchInterval: POLLING_INTERVALS.openTrades,
   });
 
-  // Real-time subscription for trades
+  // Polling instead of realtime subscription
   useEffect(() => {
-    const channel = supabase
-      .channel('trades-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'trades' },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ['trades'] });
-        }
-      )
-      .subscribe();
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ['trades'] });
+    }, POLLING_INTERVALS.openTrades);
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => clearInterval(interval);
   }, [queryClient]);
 
   // Apply side filter

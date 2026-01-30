@@ -1,5 +1,5 @@
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { createDbClient } from "../_shared/db-client.ts";
 import { requireAuth } from "../_shared/auth-middleware.ts";
 
 Deno.serve(async (req) => {
@@ -12,7 +12,7 @@ Deno.serve(async (req) => {
   if (response) return response;
 
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
 
     // Get counts in parallel
     const [
@@ -86,3 +86,4 @@ Deno.serve(async (req) => {
     );
   }
 });
+

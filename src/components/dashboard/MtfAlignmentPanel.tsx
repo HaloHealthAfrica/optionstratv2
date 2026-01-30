@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { POLLING_INTERVALS } from "@/lib/polling";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -180,7 +181,7 @@ export function MtfAlignmentPanel() {
   } = useQuery<MtfComparisonResult>({
     queryKey: ["mtf-comparison", ticker],
     queryFn: () => fetchMtfComparison(ticker),
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: POLLING_INTERVALS.mtfAlignment,
   });
 
   const handleSearch = () => {

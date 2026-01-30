@@ -3,7 +3,7 @@
  * Weighted voting with source credibility to allow trades when majority agrees
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createDbClient } from "../db-client.ts";
 import type {
   SignalScore,
   SignalSource,
@@ -15,19 +15,13 @@ import type {
 } from './types.ts';
 import { DEFAULT_CONFLICT_CONFIG } from './types.ts';
 
-const createSupabaseClient = () => {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  return createClient(supabaseUrl, supabaseServiceKey);
-};
-
 /**
  * Get source credibility scores from database
  */
 export async function getSourceCredibilities(): Promise<Map<SignalSource, SourceCredibility>> {
-  const supabase = createSupabaseClient();
+  const db = createDbClient();
   
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('source_credibility')
     .select('*');
   
@@ -210,13 +204,13 @@ export async function updateSourceCredibility(
   source: SignalSource,
   wasCorrect: boolean
 ): Promise<void> {
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   
   const { data: current } = await supabase
     .from('source_credibility')
     .select('*')
     .eq('source', source)
-    .maybeSingle();
+    .single();
   
   if (!current) {
     console.warn(`[ConflictResolution] Source ${source} not found in credibility table`);

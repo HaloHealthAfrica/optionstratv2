@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+import { POLLING_INTERVALS } from "@/lib/polling";
+import apiClient from "@/lib/api-client";
 
 export interface Trade {
   id: string;
@@ -64,32 +63,19 @@ export function useTrades(options: UseTradesOptions = {}) {
   return useQuery({
     queryKey: ["trades", underlying, side, startDate, endDate, limit, offset, includeAnalytics],
     queryFn: async (): Promise<TradesResponse> => {
-      const params = new URLSearchParams();
-      if (underlying) params.set("underlying", underlying);
-      if (side) params.set("side", side);
-      if (startDate) params.set("start_date", startDate);
-      if (endDate) params.set("end_date", endDate);
-      params.set("limit", limit.toString());
-      params.set("offset", offset.toString());
-      if (includeAnalytics) params.set("analytics", "true");
-
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      const response = await fetch(`${SUPABASE_URL}/functions/v1/trades?${params.toString()}`, {
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          ...(session?.access_token && { "Authorization": `Bearer ${session.access_token}` }),
-        },
+      const { data, error } = await apiClient.getTrades({
+        underlying,
+        side,
+        startDate,
+        endDate,
+        limit,
+        offset,
+        includeAnalytics,
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch trades: ${response.status}`);
-      }
-
-      return response.json();
+      if (error || !data) throw error || new Error('Failed to fetch trades');
+      return data as TradesResponse;
     },
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: POLLING_INTERVALS.trades,
   });
 }
 
@@ -98,31 +84,10 @@ export function useTradesDirect() {
   return useQuery({
     queryKey: ["trades-direct"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("trades")
-        .select(`
-          *,
-          orders!inner (
-            side,
-            mode,
-            order_type,
-            signal_id
-          )
-        `)
-        .order("executed_at", { ascending: false })
-        .limit(100);
-      
-      if (error) throw error;
-      
-      // Flatten the joined data
-      return (data || []).map(t => ({
-        ...t,
-        side: t.orders?.side,
-        mode: t.orders?.mode,
-        order_type: t.orders?.order_type,
-        signal_id: t.orders?.signal_id,
-      })) as Trade[];
+      const { data, error } = await apiClient.getTrades({ limit: 100 });
+      if (error || !data) throw error || new Error('Failed to fetch trades');
+      return (data as any).trades || data;
     },
-    refetchInterval: 10000,
+    refetchInterval: POLLING_INTERVALS.openTrades,
   });
 }

@@ -8,7 +8,7 @@
  */
 
 import type { IncomingSignal, OptionType, SignalAction } from "./types.ts";
-import { createSupabaseClient } from "./supabase-client.ts";
+import { createDbClient } from "./db-client.ts";
 import { getTechnicalAnalysisService, type TechnicalConfluenceResult } from "./market-data/index.ts";
 
 // Signal source categories for confluence scoring
@@ -181,7 +181,7 @@ export async function evaluateConfluence(
   config: Partial<ConfluenceConfig> = {}
 ): Promise<ConfluenceResult> {
   const cfg = { ...DEFAULT_CONFLUENCE_CONFIG, ...config };
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   
   // Calculate lookback timestamp
   const lookbackTime = new Date();
@@ -407,7 +407,7 @@ export async function hasRecentConflict(
   direction: SignalDirection,
   lookbackMinutes: number = 10
 ): Promise<boolean> {
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   
   const lookbackTime = new Date();
   lookbackTime.setMinutes(lookbackTime.getMinutes() - lookbackMinutes);
@@ -439,3 +439,4 @@ export async function hasRecentConflict(
   
   return false;
 }
+

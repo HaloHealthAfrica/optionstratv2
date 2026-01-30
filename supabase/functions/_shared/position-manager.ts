@@ -4,7 +4,7 @@
  * Integrates GEX signals for intelligent exit decisions
  */
 
-import { createSupabaseClient } from "./supabase-client.ts";
+import { createDbClient } from "./db-client.ts";
 import { getMarketDataService } from "./market-data/index.ts";
 import type { Position } from "./types.ts";
 import type { OptionsQuote } from "./market-data/types.ts";
@@ -87,7 +87,7 @@ function calculatePnL(
 export async function refreshPositions(
   exitRuleConfig?: ExitRuleConfig
 ): Promise<RefreshResult> {
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   const marketDataService = getMarketDataService();
   
   const result: RefreshResult = {
@@ -359,7 +359,7 @@ export async function refreshPositions(
  * This is called during each refresh cycle to track the highest unrealized P&L
  */
 export async function updateHighWaterMarks(): Promise<{ updated: number; errors: string[] }> {
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   const result = { updated: 0, errors: [] as string[] };
 
   // Get all open positions with their current unrealized P&L and high water mark
@@ -423,7 +423,7 @@ export function calculateRealizedPnL(
 export async function capturePortfolioSnapshot(
   mode: 'PAPER' | 'LIVE'
 ): Promise<void> {
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
 
   // Get current positions and metrics
   const { data: positions } = await supabase
@@ -571,3 +571,4 @@ function transformDbToGexBundle(dbRow: any): GEXSignalBundle {
 // Re-export exit rules for convenience
 export { evaluateExitRules, evaluateAllPositions, getDefaultExitRules } from "./exit-rules.ts";
 export type { ExitRuleConfig, ExitEvaluation, PositionWithMarketData } from "./exit-rules.ts";
+

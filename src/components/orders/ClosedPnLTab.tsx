@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -11,8 +11,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Search, TrendingUp, TrendingDown, DollarSign, Target, Calendar } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import apiClient from "@/lib/api-client";
+import { POLLING_INTERVALS } from "@/lib/polling";
 import { format, differenceInDays } from "date-fns";
 
 interface ClosedPosition {
@@ -29,22 +30,29 @@ interface ClosedPosition {
 
 export function ClosedPnLTab() {
   const [searchTerm, setSearchTerm] = useState('');
+  const queryClient = useQueryClient();
 
-  // Fetch closed positions
+  // Fetch closed positions from API
   const { data: closedPositions, isLoading } = useQuery({
     queryKey: ['closed-positions'],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('refactored_positions')
-        .select('*')
-        .eq('status', 'CLOSED')
-        .order('exit_time', { ascending: false })
-        .limit(100);
-      
-      if (error) throw error;
-      return data as ClosedPosition[];
+      const { data, error } = await apiClient.getPositions({ showClosed: true, limit: 100 });
+      if (error || !data) throw error || new Error('Failed to fetch closed positions');
+      const payload = (data as any).positions || data;
+      const positions = payload.filter((p: ClosedPosition) => p.exit_time !== null);
+      return positions as ClosedPosition[];
     },
+    refetchInterval: POLLING_INTERVALS.closedPnL,
   });
+
+  // Polling instead of realtime subscription
+  useEffect(() => {
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ['closed-positions'] });
+    }, POLLING_INTERVALS.closedPnL);
+
+    return () => clearInterval(interval);
+  }, [queryClient]);
 
   // Filter positions by search term
   const filteredPositions = closedPositions?.filter(position => {

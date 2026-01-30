@@ -1,6 +1,4 @@
-import { supabase } from "@/integrations/supabase/client";
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+import apiClient from "@/lib/api-client";
 
 export interface MtfTimeframeBias {
   weekly: "LONG" | "SHORT" | "NEUTRAL";
@@ -71,28 +69,10 @@ export interface MtfComparisonResult {
 }
 
 async function callEdgeFunction<T>(functionName: string, params?: Record<string, string>): Promise<T> {
-  const url = new URL(`${SUPABASE_URL}/functions/v1/${functionName}`);
-  if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      url.searchParams.append(key, value);
-    });
-  }
-
-  const { data: { session } } = await supabase.auth.getSession();
-  
-  const response = await fetch(url.toString(), {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-      ...(session?.access_token && { "Authorization": `Bearer ${session.access_token}` }),
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-
-  return response.json();
+  const query = params ? `?${new URLSearchParams(params).toString()}` : "";
+  const { data, error } = await apiClient.request<T>(`/${functionName}${query}`, { method: "GET" });
+  if (error || !data) throw error || new Error("API error");
+  return data;
 }
 
 export async function fetchMtfAnalysis(ticker: string, lookback = 24): Promise<MtfAnalysisResponse> {

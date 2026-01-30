@@ -1,6 +1,10 @@
-import { useEffect, useState, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { POLLING_INTERVALS } from '@/lib/polling';
+
+// Since we no longer have Supabase realtime, we'll use polling instead
+// The hooks already have refetchInterval set, so this just provides
+// a compatible interface for components that expect realtime subscriptions
 
 interface Position {
   id: string;
@@ -26,43 +30,20 @@ interface UseRealtimePositionsOptions {
 
 export function useRealtimePositions(options: UseRealtimePositionsOptions = {}) {
   const queryClient = useQueryClient();
-  const [isSubscribed, setIsSubscribed] = useState(false);
+  const [isSubscribed, setIsSubscribed] = useState(true); // Always "subscribed" with polling
 
   useEffect(() => {
-    const channel = supabase
-      .channel('positions-realtime')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'refactored_positions' },
-        (payload) => {
-          options.onInsert?.(payload.new as Position);
-          queryClient.invalidateQueries({ queryKey: ['positions'] });
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'refactored_positions' },
-        (payload) => {
-          options.onUpdate?.(payload.new as Position);
-          queryClient.invalidateQueries({ queryKey: ['positions'] });
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'refactored_positions' },
-        (payload) => {
-          options.onDelete?.(payload.old as Position);
-          queryClient.invalidateQueries({ queryKey: ['positions'] });
-        }
-      )
-      .subscribe((status) => {
-        setIsSubscribed(status === 'SUBSCRIBED');
-      });
+    // Set up polling interval for positions
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ['positions'] });
+    }, POLLING_INTERVALS.positions);
+
+    setIsSubscribed(true);
 
     return () => {
-      supabase.removeChannel(channel);
+      clearInterval(interval);
     };
-  }, [queryClient, options.onInsert, options.onUpdate, options.onDelete]);
+  }, [queryClient]);
 
   return { isSubscribed };
 }
@@ -86,45 +67,20 @@ interface UseRealtimeOrdersOptions {
 
 export function useRealtimeOrders(options: UseRealtimeOrdersOptions = {}) {
   const queryClient = useQueryClient();
-  const [isSubscribed, setIsSubscribed] = useState(false);
+  const [isSubscribed, setIsSubscribed] = useState(true);
 
   useEffect(() => {
-    const channel = supabase
-      .channel('orders-realtime')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'orders' },
-        (payload) => {
-          options.onInsert?.(payload.new as Order);
-          queryClient.invalidateQueries({ queryKey: ['orders'] });
-          queryClient.invalidateQueries({ queryKey: ['stats'] });
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'orders' },
-        (payload) => {
-          const newOrder = payload.new as Order;
-          const oldOrder = payload.old as Order;
-          
-          options.onUpdate?.(newOrder);
-          
-          if (newOrder.status !== oldOrder.status) {
-            options.onStatusChange?.(newOrder, oldOrder.status);
-          }
-          
-          queryClient.invalidateQueries({ queryKey: ['orders'] });
-          queryClient.invalidateQueries({ queryKey: ['stats'] });
-        }
-      )
-      .subscribe((status) => {
-        setIsSubscribed(status === 'SUBSCRIBED');
-      });
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['stats'] });
+    }, POLLING_INTERVALS.orders);
+
+    setIsSubscribed(true);
 
     return () => {
-      supabase.removeChannel(channel);
+      clearInterval(interval);
     };
-  }, [queryClient, options.onInsert, options.onUpdate, options.onStatusChange]);
+  }, [queryClient]);
 
   return { isSubscribed };
 }
@@ -140,28 +96,20 @@ interface RiskViolation {
 
 export function useRealtimeRiskViolations(onViolation?: (violation: RiskViolation) => void) {
   const queryClient = useQueryClient();
-  const [isSubscribed, setIsSubscribed] = useState(false);
+  const [isSubscribed, setIsSubscribed] = useState(true);
 
   useEffect(() => {
-    const channel = supabase
-      .channel('risk-violations-realtime')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'risk_violations' },
-        (payload) => {
-          onViolation?.(payload.new as RiskViolation);
-          queryClient.invalidateQueries({ queryKey: ['risk-violations'] });
-          queryClient.invalidateQueries({ queryKey: ['stats'] });
-        }
-      )
-      .subscribe((status) => {
-        setIsSubscribed(status === 'SUBSCRIBED');
-      });
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ['risk-violations'] });
+      queryClient.invalidateQueries({ queryKey: ['stats'] });
+    }, POLLING_INTERVALS.riskViolations);
+
+    setIsSubscribed(true);
 
     return () => {
-      supabase.removeChannel(channel);
+      clearInterval(interval);
     };
-  }, [queryClient, onViolation]);
+  }, [queryClient]);
 
   return { isSubscribed };
 }
@@ -170,62 +118,40 @@ export function useRealtimeRiskViolations(onViolation?: (violation: RiskViolatio
 export function useDashboardRealtime() {
   const queryClient = useQueryClient();
   const [subscriptionStatus, setSubscriptionStatus] = useState({
-    positions: false,
-    orders: false,
-    trades: false,
-    violations: false,
+    positions: true,
+    orders: true,
+    trades: true,
+    violations: true,
   });
 
   useEffect(() => {
-    const positionsChannel = supabase
-      .channel('dashboard-positions')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'refactored_positions' }, () => {
-        queryClient.invalidateQueries({ queryKey: ['positions'] });
-        queryClient.invalidateQueries({ queryKey: ['stats'] });
-      })
-      .subscribe((status) => {
-        setSubscriptionStatus(prev => ({ ...prev, positions: status === 'SUBSCRIBED' }));
-      });
+    // Poll all data sources
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ['positions'] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['trades'] });
+      queryClient.invalidateQueries({ queryKey: ['risk-violations'] });
+      queryClient.invalidateQueries({ queryKey: ['stats'] });
+    }, Math.min(
+      POLLING_INTERVALS.positions,
+      POLLING_INTERVALS.orders,
+      POLLING_INTERVALS.trades,
+      POLLING_INTERVALS.riskViolations
+    ));
 
-    const ordersChannel = supabase
-      .channel('dashboard-orders')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
-        queryClient.invalidateQueries({ queryKey: ['orders'] });
-        queryClient.invalidateQueries({ queryKey: ['stats'] });
-      })
-      .subscribe((status) => {
-        setSubscriptionStatus(prev => ({ ...prev, orders: status === 'SUBSCRIBED' }));
-      });
-
-    const tradesChannel = supabase
-      .channel('dashboard-trades')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, () => {
-        queryClient.invalidateQueries({ queryKey: ['trades'] });
-        queryClient.invalidateQueries({ queryKey: ['stats'] });
-      })
-      .subscribe((status) => {
-        setSubscriptionStatus(prev => ({ ...prev, trades: status === 'SUBSCRIBED' }));
-      });
-
-    const violationsChannel = supabase
-      .channel('dashboard-violations')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'risk_violations' }, () => {
-        queryClient.invalidateQueries({ queryKey: ['risk-violations'] });
-        queryClient.invalidateQueries({ queryKey: ['stats'] });
-      })
-      .subscribe((status) => {
-        setSubscriptionStatus(prev => ({ ...prev, violations: status === 'SUBSCRIBED' }));
-      });
+    setSubscriptionStatus({
+      positions: true,
+      orders: true,
+      trades: true,
+      violations: true,
+    });
 
     return () => {
-      supabase.removeChannel(positionsChannel);
-      supabase.removeChannel(ordersChannel);
-      supabase.removeChannel(tradesChannel);
-      supabase.removeChannel(violationsChannel);
+      clearInterval(interval);
     };
   }, [queryClient]);
 
-  const allSubscribed = Object.values(subscriptionStatus).every(Boolean);
+  const allSubscribed = true; // Always "subscribed" with polling
 
   return { 
     subscriptionStatus, 

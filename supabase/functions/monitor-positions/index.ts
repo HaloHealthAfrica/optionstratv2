@@ -1,5 +1,5 @@
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { createDbClient } from "../_shared/db-client.ts";
 import { 
   getOpenPaperPositions,
   updatePaperPosition,
@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
         const underlyingPrice = chain.underlying_price;
 
         // Generate GEX signals
-        const supabase = createSupabaseClient();
+        const supabase = createDbClient();
         const { data: previousSignal } = await supabase
           .from('gex_signals')
           .select('net_gex, dealer_position')
@@ -277,3 +277,4 @@ Deno.serve(async (req) => {
     });
   }
 });
+

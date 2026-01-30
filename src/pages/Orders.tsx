@@ -35,13 +35,15 @@ import {
   Activity,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import apiClient from "@/lib/api-client";
+import { POLLING_INTERVALS } from "@/lib/polling";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useHealth } from "@/hooks/useSystemData";
 import { ClosedPnLTab } from "@/components/orders/ClosedPnLTab";
 import { TradesTab } from "@/components/orders/TradesTab";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
+
 
 interface Order {
   id: string;
@@ -93,53 +95,32 @@ export default function OrdersPage() {
   const { data: orders, isLoading, refetch } = useQuery({
     queryKey: ['orders', statusFilter],
     queryFn: async () => {
-      let query = supabase
-        .from('orders')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100);
-      
-      if (statusFilter !== 'all') {
-        query = query.eq('status', statusFilter);
-      }
-      
-      const { data, error } = await query;
-      if (error) throw error;
+      const { data, error } = await apiClient.getOrders({
+        limit: 100,
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+      });
+      if (error || !data) throw new Error(error?.message || 'Failed to fetch orders');
       return data as Order[];
     },
   });
 
-  // Real-time subscription
+  // Polling instead of realtime subscription
   useEffect(() => {
-    const channel = supabase
-      .channel('orders-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
-        () => {
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    }, POLLING_INTERVALS.orders);
+
+    return () => clearInterval(interval);
+  }, [queryClient]);
           queryClient.invalidateQueries({ queryKey: ['orders'] });
         }
       )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [queryClient]);
-
   // Cancel order mutation
   const cancelOrderMutation = useMutation({
     mutationFn: async (orderId: string) => {
-      const { error } = await supabase
-        .from('orders')
-        .update({ 
-          status: 'CANCELLED', 
-          cancelled_at: new Date().toISOString() 
-        })
-        .eq('id', orderId)
-        .in('status', ['PENDING', 'SUBMITTED', 'PARTIAL']);
-      
+      const { data, error } = await apiClient.cancelOrder(orderId);
       if (error) throw error;
+      return data;
     },
     onSuccess: () => {
       toast.success('Order cancelled successfully');

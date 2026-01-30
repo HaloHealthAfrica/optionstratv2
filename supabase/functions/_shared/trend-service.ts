@@ -3,7 +3,7 @@
  * Provides access to latest MTF trend data for decision engine
  */
 
-import { createSupabaseClient } from "./supabase-client.ts";
+import { createDbClient } from "./db-client.ts";
 import type { MTFTrendForDecision } from "./types.ts";
 
 // Trend stale threshold in milliseconds (5 minutes)
@@ -14,7 +14,7 @@ const TREND_STALE_THRESHOLD_MS = 5 * 60 * 1000;
  */
 export async function getLatestTrend(ticker: string): Promise<MTFTrendForDecision | null> {
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     
     // Query the signals table for MTF Trend Dots data
     const { data, error } = await supabase
@@ -54,7 +54,7 @@ export async function getLatestTrendBatch(tickers: string[]): Promise<Map<string
   }
 
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     
     // Get latest trend signals for each ticker
     const { data, error } = await supabase
@@ -167,3 +167,4 @@ export function isTrendStale(trend: MTFTrendForDecision): boolean {
   const ageMs = Date.now() - trend.updatedAt.getTime();
   return ageMs > TREND_STALE_THRESHOLD_MS;
 }
+

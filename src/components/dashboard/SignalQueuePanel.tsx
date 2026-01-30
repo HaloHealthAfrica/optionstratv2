@@ -2,7 +2,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Clock, Zap } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { POLLING_INTERVALS } from "@/lib/polling";
+import apiClient from "@/lib/api-client";
 import { formatDistanceToNow } from "date-fns";
 
 interface QueuedSignal {
@@ -20,21 +21,16 @@ interface QueuedSignal {
 }
 
 async function fetchQueuedSignals(): Promise<QueuedSignal[]> {
-  const { data, error } = await supabase
-    .from("refactored_signals")
-    .select("id, source, symbol, direction, timeframe, created_at, validation_result")
-    .order("created_at", { ascending: false })
-    .limit(10);
-
-  if (error) throw error;
-  return (data || []) as QueuedSignal[];
+  const { data, error } = await apiClient.getSignals({ limit: 10 });
+  if (error || !data) throw error || new Error('Failed to fetch signals');
+  return ((data as any).signals || data || []) as QueuedSignal[];
 }
 
 export function SignalQueuePanel() {
   const { data: queuedSignals, isLoading } = useQuery({
     queryKey: ["queued-signals"],
     queryFn: fetchQueuedSignals,
-    refetchInterval: 10000,
+    refetchInterval: POLLING_INTERVALS.signalQueue,
   });
 
   const signalCount = queuedSignals?.length || 0;

@@ -4,7 +4,7 @@
  * Tracks market regime transitions and gates entries during unstable periods.
  */
 
-import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createDbClient } from '../db-client.ts';
 import type {
   MarketRegime,
   DealerPosition,
@@ -19,11 +19,8 @@ import { DEFAULT_REGIME_STABILITY_CONFIG } from './types.ts';
 /**
  * Get Supabase client for regime operations
  */
-function getSupabaseClient(): SupabaseClient {
-  return createClient(
-    Deno.env.get('SUPABASE_URL') || '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
-  );
+function getSupabaseClient() {
+  return createDbClient();
 }
 
 /**
@@ -122,7 +119,7 @@ export async function recordRegimeObservation(
     .eq('ticker', ticker)
     .order('checked_at', { ascending: false })
     .limit(1)
-    .maybeSingle();
+    .single();
   
   let consecutiveSameRegime = 1;
   let timeInRegimeSeconds = 0;
@@ -227,7 +224,7 @@ export async function getRegimeStability(
     .eq('ticker', ticker)
     .order('checked_at', { ascending: false })
     .limit(1)
-    .maybeSingle();
+    .single();
   
   if (!data) return null;
   

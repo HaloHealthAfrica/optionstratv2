@@ -22,16 +22,11 @@ Deno.serve(async (req) => {
     const ticker = url.searchParams.get("ticker") || "SPY";
     const lookbackHours = parseInt(url.searchParams.get("lookback") || "24");
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
     console.log(`Analyzing MTF for ${ticker} with ${lookbackHours}h lookback...`);
 
     const analysis = await analyzeMultiTimeframe(
       ticker,
-      lookbackHours,
-      supabaseUrl,
-      supabaseKey
+      lookbackHours
     );
 
     const primarySignal = getPrimaryEntrySignal(analysis);

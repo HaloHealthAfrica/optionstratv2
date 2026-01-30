@@ -161,6 +161,8 @@ export class SignalNormalizer {
       '1min': '1m',
       '5m': '5m',
       '5min': '5m',
+      '3m': '3m',
+      '3min': '3m',
       '15m': '15m',
       '15min': '15m',
       '30m': '30m',
@@ -173,9 +175,20 @@ export class SignalNormalizer {
       '1d': '1d',
       '1day': '1d',
       'daily': '1d',
+      '1w': '1w',
+      '1wk': '1w',
+      'weekly': '1w',
     };
-    
-    return timeframeMap[normalized] || normalized;
+
+    if (timeframeMap[normalized]) {
+      return timeframeMap[normalized];
+    }
+
+    if (/^\d+$/.test(normalized)) {
+      return `${normalized}m`;
+    }
+
+    return normalized;
   }
 
   /**

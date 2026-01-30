@@ -6,7 +6,7 @@
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { createDbClient } from "../_shared/db-client.ts";
 import { MetricsService } from "../_shared/refactored/monitoring/metrics-service.ts";
 
 // Initialize metrics service (shared with webhook handler)
@@ -25,7 +25,7 @@ Deno.serve(async (req) => {
   const path = url.pathname;
 
   try {
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
 
     // Get current position metrics from database
     const { data: positions } = await supabase
@@ -127,3 +127,4 @@ Deno.serve(async (req) => {
     );
   }
 });
+

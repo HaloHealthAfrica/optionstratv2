@@ -43,12 +43,14 @@ export interface EntryDecision {
     baseConfidence: number;
     contextAdjustment: number;
     positioningAdjustment: number;
+    indicatorAdjustment: number;
     gexAdjustment: number;
     finalConfidence: number;
     baseSizing: number;
     kellyMultiplier: number;
     regimeMultiplier: number;
     confluenceMultiplier: number;
+    indicatorSizeMultiplier: number;
     finalSize: number;
   };
 }
@@ -79,6 +81,11 @@ export interface Position {
   currentPrice?: number;
   unrealizedPnL?: number;
   status: PositionStatus;
+  underlying?: string;
+  strike?: number;
+  expiration?: string;
+  optionType?: 'CALL' | 'PUT';
+  timeframe?: string;
 }
 
 export interface ContextData {

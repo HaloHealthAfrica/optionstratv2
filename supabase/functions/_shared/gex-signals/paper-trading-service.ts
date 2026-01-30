@@ -4,9 +4,9 @@
  * Executes and manages paper trades with full context capture
  */
 
-import { createSupabaseClient } from '../supabase-client.ts';
+import { createDbClient } from '../db-client.ts';
 
-const createServiceClient = createSupabaseClient;
+const createServiceClient = createDbClient;
 import type { 
   GEXSignalBundle, 
   EntryDecision, 
@@ -475,3 +475,4 @@ async function updateAccountStats(
       .eq('id', account.id);
   }
 }
+

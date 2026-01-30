@@ -7,7 +7,7 @@
 // - Entry on 15min-1H, filter with 4H-Daily, bias from Weekly
 // ============================================================================
 
-import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createDbClient } from './db-client.ts';
 import {
   NormalizedSignal,
   SignalDirection,
@@ -347,12 +347,10 @@ function determineRecommendation(
 
 export async function analyzeMultiTimeframe(
   ticker: string,
-  lookbackHours: number = 24,
-  supabaseUrl: string,
-  supabaseKey: string
+  lookbackHours: number = 24
 ): Promise<MultiTimeframeAnalysis> {
   
-  const supabase: SupabaseClient = createClient(supabaseUrl, supabaseKey);
+  const supabase = createDbClient();
   
   // Fetch all recent COMPLETED signals for this ticker (exclude rejected)
   const cutoff = new Date(Date.now() - lookbackHours * 60 * 60 * 1000);

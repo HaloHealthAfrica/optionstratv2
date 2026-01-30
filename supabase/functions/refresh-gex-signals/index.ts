@@ -1,11 +1,11 @@
 import { corsHeaders } from "../_shared/cors.ts";
-import { createSupabaseClient } from "../_shared/supabase-client.ts";
+import { createDbClient } from "../_shared/db-client.ts";
 import { generateGEXSignals } from "../_shared/gex-signals/index.ts";
 import { createMarketdataClient } from "../_shared/market-data/marketdata-client.ts";
 
 // Tickers to track
 const TRACKED_TICKERS = ['SPY', 'QQQ', 'IWM'];
-const REFACTORED_TIMEFRAME = '15m';
+const REFACTORED_TIMEFRAMES = ['3m', '5m', '15m', '30m', '60m', '240m', '1d', '1w'];
 const GEX_STRENGTH_NORMALIZER = 1_000_000_000;
 
 // Cron job: Refresh GEX signals for tracked tickers
@@ -24,7 +24,7 @@ Deno.serve(async (req) => {
     
     console.log(`[RefreshGEX] Starting GEX signal refresh for: ${tickers.join(', ')}`);
 
-    const supabase = createSupabaseClient();
+    const supabase = createDbClient();
     const results: { ticker: string; success: boolean; regime?: string; error?: string }[] = [];
 
     // Get next Friday expiration for weekly options
@@ -139,27 +139,30 @@ Deno.serve(async (req) => {
           Math.abs(signals.netGex) / GEX_STRENGTH_NORMALIZER
         );
 
+        const gexTimestamp = new Date().toISOString();
+        const refactoredRows = REFACTORED_TIMEFRAMES.map((timeframe) => ({
+          id: crypto.randomUUID(),
+          symbol: tkr,
+          timeframe,
+          strength: refactoredStrength,
+          direction: refactoredDirection,
+          timestamp: gexTimestamp,
+          age: 0,
+          metadata: {
+            source: 'refresh-gex-signals',
+            expiration,
+            net_gex: signals.netGex,
+            dealer_position: signals.dealerPosition,
+            zero_gamma_level: signals.zeroGammaBreakout.zeroGammaLevel,
+            gex_flip_detected: signals.gexFlip.detected,
+            market_regime: signals.marketRegime.regime,
+            summary_bias: signals.summary.overallBias,
+          },
+        }));
+
         const { error: refactoredError } = await supabase
           .from('refactored_gex_signals')
-          .insert({
-            id: crypto.randomUUID(),
-            symbol: tkr,
-            timeframe: REFACTORED_TIMEFRAME,
-            strength: refactoredStrength,
-            direction: refactoredDirection,
-            timestamp: new Date().toISOString(),
-            age: 0,
-            metadata: {
-              source: 'refresh-gex-signals',
-              expiration,
-              net_gex: signals.netGex,
-              dealer_position: signals.dealerPosition,
-              zero_gamma_level: signals.zeroGammaBreakout.zeroGammaLevel,
-              gex_flip_detected: signals.gexFlip.detected,
-              market_regime: signals.marketRegime.regime,
-              summary_bias: signals.summary.overallBias,
-            },
-          });
+          .insert(refactoredRows);
 
         if (refactoredError) {
           console.error(`[RefreshGEX] Failed to store refactored signal for ${tkr}:`, refactoredError);
@@ -218,3 +221,4 @@ Deno.serve(async (req) => {
     });
   }
 });
+

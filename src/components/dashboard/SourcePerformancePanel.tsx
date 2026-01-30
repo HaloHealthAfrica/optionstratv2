@@ -2,7 +2,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BarChart3 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { POLLING_INTERVALS } from "@/lib/polling";
+import apiClient from "@/lib/api-client";
 import { Progress } from "@/components/ui/progress";
 
 // Source weights from confluence-engine.ts (for display)
@@ -25,16 +26,14 @@ interface SourceStats {
 }
 
 async function fetchSourceStats(): Promise<SourceStats[]> {
-  const { data, error } = await supabase
-    .from("refactored_signals")
-    .select("source, validation_result");
-
-  if (error) throw error;
+  const { data: result, error } = await apiClient.getSignals({ limit: 1000 });
+  if (error || !result) throw error || new Error('Failed to fetch signals');
+  const data = (result as any).signals || result || [];
 
   // Group by source
   const sourceMap = new Map<string, { total: number; completed: number; rejected: number }>();
   
-  (data || []).forEach((signal) => {
+  data.forEach((signal: any) => {
     const stats = sourceMap.get(signal.source) || { total: 0, completed: 0, rejected: 0 };
     stats.total++;
     if (signal.validation_result?.valid === true) stats.completed++;
@@ -58,7 +57,7 @@ export function SourcePerformancePanel() {
   const { data: sources, isLoading } = useQuery({
     queryKey: ["source-performance"],
     queryFn: fetchSourceStats,
-    refetchInterval: 30000,
+    refetchInterval: POLLING_INTERVALS.sourcePerformance,
   });
 
   return (

@@ -19,7 +19,7 @@ import { RiskManager } from "./services/risk-manager.ts";
 import { PositionSizingService } from "./services/position-sizing-service.ts";
 import { ConfluenceCalculator } from "./services/confluence-calculator.ts";
 import { defaultConfig } from "./core/config.ts";
-import { createSupabaseClient } from "../supabase-client.ts";
+import { createDbClient } from "../db-client.ts";
 import { DegradedModeTracker } from "./monitoring/degraded-mode-tracker.ts";
 import { AuditLogger } from "./monitoring/audit-logger.ts";
 
@@ -27,7 +27,7 @@ import { AuditLogger } from "./monitoring/audit-logger.ts";
  * Initialize the unified signal processing pipeline
  */
 function initializePipeline(): SignalPipeline {
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   const degradedModeTracker = new DegradedModeTracker();
   const auditLogger = new AuditLogger();
 
@@ -198,7 +198,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
  * Process signal asynchronously through the unified pipeline
  */
 async function processSignalAsync(rawPayload: any, correlationId: string): Promise<void> {
-  const supabase = createSupabaseClient();
+  const supabase = createDbClient();
   
   try {
     console.log(`[${correlationId}] Processing signal through unified pipeline...`);
@@ -266,3 +266,4 @@ async function processSignalAsync(rawPayload: any, correlationId: string): Promi
 export default async function serve(req: Request): Promise<Response> {
   return handleWebhookRequest(req);
 }
+
