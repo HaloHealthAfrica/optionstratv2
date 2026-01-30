@@ -37,13 +37,13 @@
 
 ```bash
 # Review pending migrations
-supabase db diff
+ls supabase/migrations
 
-# Apply migrations
-supabase db push
+# Apply migrations (Neon/Fly Postgres)
+psql "$DATABASE_URL" -f supabase/migrations/<latest>.sql
 
 # Verify schema
-supabase db inspect
+psql "$DATABASE_URL" -c "\dt"
 ```
 
 **Expected Tables:**
@@ -54,37 +54,28 @@ supabase db inspect
 - `context_snapshots`
 - `processing_errors`
 
-### Step 2: Deploy Supabase Functions
+### Step 2: Deploy Fly Backend
 
 ```bash
-# Deploy webhook handler
-supabase functions deploy webhook --no-verify-jwt
-
-# Deploy health check endpoint
-supabase functions deploy health --no-verify-jwt
-
-# Deploy metrics endpoint
-supabase functions deploy metrics --no-verify-jwt
+# Deploy backend to Fly.io
+flyctl deploy -a optionstrat-backend
 ```
 
 **Verify Deployment:**
 ```bash
-# List deployed functions
-supabase functions list
-
-# Check function logs
-supabase functions logs webhook
+# Check application logs
+flyctl logs -a optionstrat-backend
 ```
 
 ### Step 3: Configure Environment Variables
 
 ```bash
-# Set environment variables for functions
-supabase secrets set WEBHOOK_SECRET=your_secret_here
-supabase secrets set NODE_ENV=production
+# Set environment variables for Fly.io app
+flyctl secrets set WEBHOOK_SECRET=your_secret_here -a optionstrat-backend
+flyctl secrets set NODE_ENV=production -a optionstrat-backend
 
 # Verify secrets
-supabase secrets list
+flyctl secrets list -a optionstrat-backend
 ```
 
 ### Step 4: Test Deployed Functions
@@ -92,7 +83,7 @@ supabase secrets list
 #### Test Health Endpoint
 
 ```bash
-curl https://your-project.supabase.co/functions/v1/health
+curl https://optionstrat-backend.fly.dev/health
 ```
 
 **Expected Response:**
@@ -113,7 +104,7 @@ curl https://your-project.supabase.co/functions/v1/health
 #### Test Metrics Endpoint
 
 ```bash
-curl https://your-project.supabase.co/functions/v1/metrics
+curl https://optionstrat-backend.fly.dev/metrics
 ```
 
 **Expected Response:**
@@ -138,7 +129,7 @@ curl https://your-project.supabase.co/functions/v1/metrics
 #### Test Webhook with Sample Signal
 
 ```bash
-curl -X POST https://your-project.supabase.co/functions/v1/webhook \
+curl -X POST https://optionstrat-backend.fly.dev/webhook \
   -H "Content-Type: application/json" \
   -H "x-signature: your_signature" \
   -d '{
@@ -169,13 +160,13 @@ curl -X POST https://your-project.supabase.co/functions/v1/webhook \
 
 ```bash
 # Watch webhook logs in real-time
-supabase functions logs webhook --tail
+flyctl logs -a optionstrat-backend --tail
 
 # Check for errors
-supabase functions logs webhook | grep ERROR
+flyctl logs -a optionstrat-backend | grep ERROR
 
 # Monitor database
-supabase db inspect
+psql "$DATABASE_URL"
 ```
 
 ### Step 6: Verify Frontend Integration
@@ -226,20 +217,17 @@ If issues occur, follow this rollback procedure:
 git checkout HEAD~1 -- supabase/functions/webhook/index.ts
 
 # Redeploy previous version
-supabase functions deploy webhook --no-verify-jwt
+flyctl deploy -a optionstrat-backend
 
 # Verify rollback
-curl https://your-project.supabase.co/functions/v1/webhook
+curl https://optionstrat-backend.fly.dev/webhook
 ```
 
 ### Database Rollback
 
 ```bash
-# Revert database migrations
-supabase db reset
-
-# Or restore from backup
-supabase db restore backup_file.sql
+# Revert database migrations (restore from backup)
+psql "$DATABASE_URL" < backup_file.sql
 ```
 
 ### Verify Rollback
@@ -255,7 +243,7 @@ supabase db restore backup_file.sql
 
 **Diagnosis:**
 ```bash
-supabase functions logs webhook | tail -50
+flyctl logs -a optionstrat-backend | tail -50
 ```
 
 **Common Causes:**
@@ -273,7 +261,7 @@ supabase functions logs webhook | tail -50
 
 **Diagnosis:**
 ```bash
-curl https://your-project.supabase.co/functions/v1/metrics/latency
+curl https://optionstrat-backend.fly.dev/metrics/latency
 ```
 
 **Common Causes:**
@@ -292,10 +280,10 @@ curl https://your-project.supabase.co/functions/v1/metrics/latency
 **Diagnosis:**
 ```bash
 # Check health
-curl https://your-project.supabase.co/functions/v1/health
+curl https://optionstrat-backend.fly.dev/health
 
 # Check recent signals
-supabase db query "SELECT * FROM signals ORDER BY created_at DESC LIMIT 10"
+psql "$DATABASE_URL" -c "SELECT * FROM signals ORDER BY created_at DESC LIMIT 10"
 ```
 
 **Common Causes:**
@@ -313,7 +301,7 @@ supabase db query "SELECT * FROM signals ORDER BY created_at DESC LIMIT 10"
 
 **Diagnosis:**
 ```bash
-curl https://your-project.supabase.co/functions/v1/health
+curl https://optionstrat-backend.fly.dev/health
 ```
 
 **Common Causes:**
@@ -360,7 +348,7 @@ Adjust function memory if needed:
 
 ```bash
 # Increase memory allocation
-supabase functions deploy webhook --memory 512
+flyctl scale memory 512 -a optionstrat-backend
 ```
 
 ## Monitoring Setup

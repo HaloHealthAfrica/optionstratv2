@@ -190,22 +190,15 @@ If issues occur:
    - Verify frontend displays
 
 3. **Debug:**
-   - Check function logs in Supabase dashboard
+   - Check Fly.io logs
    - Review error messages
    - Check database for failed signals
 
 ## Deployment Steps
 
-1. **Deploy Functions:**
+1. **Deploy Backend:**
    ```bash
-   # Deploy webhook function
-   supabase functions deploy webhook
-   
-   # Deploy health function
-   supabase functions deploy health
-   
-   # Deploy metrics function
-   supabase functions deploy metrics
+   flyctl deploy -a optionstrat-backend
    ```
 
 2. **Verify Deployment:**

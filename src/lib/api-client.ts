@@ -143,11 +143,6 @@ class ApiClient {
     return this.request<any>(`/market-positioning?${query.toString()}`);
   }
 
-  // Market positioning endpoint
-  async getMarketPositioning() {
-    return this.request<any>('/market-positioning');
-  }
-
   // Metrics endpoint
   async getMetrics() {
     return this.request<any>('/metrics');

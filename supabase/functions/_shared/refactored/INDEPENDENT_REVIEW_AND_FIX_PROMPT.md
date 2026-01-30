@@ -67,7 +67,7 @@ TradingView → Webhook → SignalPipeline → DecisionOrchestrator → Database
 **Tests to Run:**
 ```bash
 # Send test webhook
-curl -X POST http://localhost:54321/functions/v1/webhook \
+curl -X POST https://optionstrat-backend.fly.dev/webhook \
   -H "Content-Type: application/json" \
   -d '{"ticker":"SPY","action":"BUY","timeframe":"5m"}'
 ```
@@ -592,11 +592,12 @@ After implementing fixes, verify everything works:
 cd optionstrat-main/supabase/functions
 deno test --allow-all
 
-# 2. Start local Supabase
-supabase start
+# 2. Start local backend
+cd optionstrat-main
+deno run -A server.ts
 
 # 3. Test webhook endpoint
-curl -X POST http://localhost:54321/functions/v1/webhook \
+curl -X POST https://optionstrat-backend.fly.dev/webhook \
   -H "Content-Type: application/json" \
   -d '{
     "ticker": "SPY",
@@ -607,13 +608,13 @@ curl -X POST http://localhost:54321/functions/v1/webhook \
   }'
 
 # 4. Test health endpoint
-curl http://localhost:54321/functions/v1/health
+curl http://localhost:8080/health
 
 # 5. Test metrics endpoint
-curl http://localhost:54321/functions/v1/metrics
+curl http://localhost:8080/metrics
 
 # 6. Check database
-psql -h localhost -p 54322 -U postgres -d postgres
+psql "$DATABASE_URL"
 SELECT COUNT(*) FROM signals;
 SELECT COUNT(*) FROM positions;
 SELECT COUNT(*) FROM decisions;
@@ -813,14 +814,15 @@ deno test --allow-all cache/context-cache.test.ts
 # Run with coverage
 deno test --allow-all --coverage=coverage
 
-# Start Supabase locally
-supabase start
+# Start backend locally
+cd optionstrat-main
+deno run -A server.ts
 
-# View logs
-supabase functions logs webhook
+# View logs (Fly.io)
+flyctl logs -a optionstrat-backend
 
-# Deploy function
-supabase functions deploy webhook
+# Deploy backend
+flyctl deploy -a optionstrat-backend
 ```
 
 ### Frontend Testing
@@ -844,17 +846,14 @@ npm run type-check
 
 ### Database Testing
 ```bash
-# Connect to local database
-psql -h localhost -p 54322 -U postgres -d postgres
+# Connect to database
+psql "$DATABASE_URL"
 
-# Run migration
-supabase migration up
+# Apply migrations
+psql "$DATABASE_URL" -f supabase/migrations/<latest>.sql
 
-# Reset database
-supabase db reset
-
-# Generate types
-supabase gen types typescript --local > src/integrations/supabase/types.ts
+# Reset database (restore from backup)
+psql "$DATABASE_URL" < backup_file.sql
 ```
 
 ---

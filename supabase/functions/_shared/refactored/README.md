@@ -262,24 +262,21 @@ deno task test
 ### Prerequisites
 
 - Deno runtime installed
-- Supabase project configured
+- Fly.io app configured
 - Environment variables set:
-  - `SUPABASE_URL`
-  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `DATABASE_URL`
   - `WEBHOOK_SECRET`
 
 ### Deployment Steps
 
-1. **Deploy Database Migrations**
+1. **Apply Database Migrations**
    ```bash
-   supabase db push
+   psql "$DATABASE_URL" -f supabase/migrations/<latest>.sql
    ```
 
-2. **Deploy Functions**
+2. **Deploy Backend**
    ```bash
-   supabase functions deploy webhook
-   supabase functions deploy health
-   supabase functions deploy metrics
+   flyctl deploy -a optionstrat-backend
    ```
 
 3. **Verify Deployment**

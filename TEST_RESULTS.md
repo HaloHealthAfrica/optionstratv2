@@ -18,7 +18,7 @@
 ## Notes
 
 - Deno installed via winget, but tests failed due to Deno workspace/package.json error.
-- Supabase CLI installed manually; `supabase start` failed due to Docker Desktop engine 500 errors.
+- Local backend start failed due to Docker Desktop engine 500 errors.
 - Docker Desktop must be healthy before local Supabase can start.
 - Consider running `npm run build` and `npm run type-check` in `optionstrat-main` after installing dependencies.
 

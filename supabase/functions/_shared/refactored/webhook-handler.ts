@@ -142,7 +142,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
     
     // Validate authentication (optional - implement based on your needs)
     const signature = req.headers.get("x-signature");
-    const webhookSecret = Deno.env.get("WEBHOOK_SECRET");
+    const webhookSecret = Deno.env.get("WEBHOOK_SECRET") || Deno.env.get("HMAC_SECRET");
     
     if (webhookSecret && signature) {
       // TODO: Implement signature verification
