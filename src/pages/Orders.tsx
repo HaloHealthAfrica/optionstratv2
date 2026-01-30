@@ -112,9 +112,7 @@ export default function OrdersPage() {
 
     return () => clearInterval(interval);
   }, [queryClient]);
-          queryClient.invalidateQueries({ queryKey: ['orders'] });
-        }
-      )
+
   // Cancel order mutation
   const cancelOrderMutation = useMutation({
     mutationFn: async (orderId: string) => {
