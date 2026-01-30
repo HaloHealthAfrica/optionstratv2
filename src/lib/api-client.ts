@@ -3,7 +3,7 @@
  * Replaces Supabase client with direct API calls
  */
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://optionstrat-backend.fly.dev';
+const API_URL = import.meta.env.VITE_API_URL || 'https://optionstratv2.fly.dev';
 
 interface ApiResponse<T> {
   data: T | null;
