@@ -1,11 +1,10 @@
 // Stats endpoint - System statistics and metrics
 import express from 'express';
-import { requireAuth } from '../lib/auth.js';
 import { query } from '../lib/db.js';
 
 const router = express.Router();
 
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const [signalsResult, ordersResult, tradesResult, positionsResult, violationsResult] = await Promise.all([
       query('SELECT id, validation_result FROM refactored_signals'),

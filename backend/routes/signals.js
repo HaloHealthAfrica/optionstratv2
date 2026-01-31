@@ -1,12 +1,11 @@
 // Signals endpoint
 import express from 'express';
-import { requireAuth } from '../lib/auth.js';
 import { query } from '../lib/db.js';
 
 const router = express.Router();
 
 // GET /signals - Get all signals
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit || '50', 10);
     const status = req.query.status;
@@ -48,7 +47,7 @@ router.get('/', requireAuth, async (req, res) => {
 });
 
 // POST /signals - Create a signal (if needed)
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', async (req, res) => {
   try {
     // Implementation depends on your signal creation logic
     res.status(501).json({ error: 'Not implemented yet' });

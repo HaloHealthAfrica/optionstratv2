@@ -1,11 +1,10 @@
 // Positions endpoint
 import express from 'express';
-import { requireAuth } from '../lib/auth.js';
 import { query } from '../lib/db.js';
 
 const router = express.Router();
 
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const showClosed = req.query.show_closed === 'true';
     const params = [];
