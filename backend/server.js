@@ -17,6 +17,7 @@ import analyticsRouter from './routes/analytics.js';
 import exitSignalsRouter from './routes/exit-signals.js';
 import exitRulesRouter from './routes/exit-rules.js';
 import riskLimitsRouter from './routes/risk-limits.js';
+import riskViolationsRouter from './routes/risk-violations.js';
 import marketPositioningRouter from './routes/market-positioning.js';
 import metricsRouter from './routes/metrics.js';
 import monitorPositionsRouter from './routes/monitor-positions.js';
@@ -73,6 +74,7 @@ app.use('/analytics', analyticsRouter);
 app.use('/exit-signals', exitSignalsRouter);
 app.use('/exit-rules', exitRulesRouter);
 app.use('/risk-limits', riskLimitsRouter);
+app.use('/risk-violations', riskViolationsRouter);
 app.use('/market-positioning', marketPositioningRouter);
 app.use('/metrics', metricsRouter);
 app.use('/monitor-positions', monitorPositionsRouter);
@@ -97,10 +99,10 @@ app.use((req, res) => {
     message: `Endpoint '${req.path}' not found`,
     available: [
       'health', 'auth', 'signals', 'orders', 'positions', 'stats', 'webhook',
-      'analytics', 'exit-signals', 'exit-rules', 'risk-limits', 'market-positioning',
-      'metrics', 'monitor-positions', 'mtf-analysis', 'mtf-comparison', 'paper-trading',
-      'poll-orders', 'refresh-gex-signals', 'refresh-positions', 'refactored-exit-worker',
-      'trades'
+      'analytics', 'exit-signals', 'exit-rules', 'risk-limits', 'risk-violations',
+      'market-positioning', 'metrics', 'monitor-positions', 'mtf-analysis', 'mtf-comparison',
+      'paper-trading', 'poll-orders', 'refresh-gex-signals', 'refresh-positions',
+      'refactored-exit-worker', 'trades'
     ],
   });
 });
@@ -117,7 +119,7 @@ app.use((err, req, res, next) => {
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Optionstrat Backend Server (Node.js) starting on port ${PORT}`);
-  console.log(`📦 Available endpoints: health, auth, signals, orders, positions, stats, webhook, analytics, exit-signals, exit-rules, risk-limits, market-positioning, metrics, monitor-positions, mtf-analysis, mtf-comparison, paper-trading, poll-orders, refresh-gex-signals, refresh-positions, refactored-exit-worker, trades`);
+  console.log(`📦 Available endpoints: health, auth, signals, orders, positions, stats, webhook, analytics, exit-signals, exit-rules, risk-limits, risk-violations, market-positioning, metrics, monitor-positions, mtf-analysis, mtf-comparison, paper-trading, poll-orders, refresh-gex-signals, refresh-positions, refactored-exit-worker, trades`);
   console.log(`✅ Server ready at http://0.0.0.0:${PORT}`);
 });
 
