@@ -85,7 +85,7 @@ export function ExitSignalsPanel() {
     toast.success("Exit signals refreshed");
   };
   
-  const alerts = data?.alerts.filter(a => !dismissedAlerts.has(a.position_id)) || [];
+  const alerts = data?.alerts?.filter(a => !dismissedAlerts.has(a.position_id)) || [];
   const summary = data?.summary;
   
   if (isLoading) {
