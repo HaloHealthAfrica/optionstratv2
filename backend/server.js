@@ -111,10 +111,10 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Optionstrat Backend Server (Node.js) starting on port ${PORT}`);
   console.log(`📦 Available endpoints: health, auth, signals, orders, positions, stats, webhook, analytics, exit-signals, exit-rules, risk-limits, market-positioning, metrics, monitor-positions, mtf-analysis, mtf-comparison, paper-trading, poll-orders, refresh-gex-signals, refresh-positions, refactored-exit-worker, trades`);
-  console.log(`✅ Server ready at http://localhost:${PORT}`);
+  console.log(`✅ Server ready at http://0.0.0.0:${PORT}`);
 });
 
 // Graceful shutdown
