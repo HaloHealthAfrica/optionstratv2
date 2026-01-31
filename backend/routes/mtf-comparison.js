@@ -1,34 +1,59 @@
 // Mtf comparison endpoint
 import express from 'express';
-import { query } from '../lib/db.js';
+import { requireAuth } from '../lib/auth.js';
 
 const router = express.Router();
 
-router.get('/', async (req, res) => {
+router.get('/', requireAuth, async (req, res) => {
   try {
-    // Return empty comparison data for now
-    res.json({
-      comparison: {
-        timeframes: [],
-        alignment_score: 0,
-        bullish_count: 0,
-        bearish_count: 0,
-        neutral_count: 0,
+    const ticker = (req.query.ticker || 'SPY').toString().toUpperCase();
+    const emptyAnalysis = {
+      ticker,
+      recommendation: 'HOLD',
+      confidence: 0,
+      riskLevel: 'LOW',
+      positionSizeMultiplier: 0,
+      timeframeBias: {
+        weekly: 'NEUTRAL',
+        daily: 'NEUTRAL',
+        fourHour: 'NEUTRAL',
+        entry: 'NEUTRAL',
       },
-      timestamp: new Date().toISOString(),
+      alignment: {
+        isAligned: false,
+        score: 0,
+        confluenceCount: 0,
+        reasons: [],
+      },
+      signals: {
+        total: 0,
+        entry: 0,
+        confirmation: 0,
+        entryDetails: [],
+        confirmationDetails: [],
+      },
+      primaryEntrySignal: null,
+    };
+
+    res.json({
+      ticker,
+      analysis: emptyAnalysis,
+      strictResult: {
+        approved: false,
+        reason: 'No data available',
+        adjustedQuantity: 0,
+        positionMultiplier: 0,
+      },
+      weightedResult: {
+        approved: false,
+        reason: 'No data available',
+        adjustedQuantity: 0,
+        positionMultiplier: 0,
+      },
     });
   } catch (error) {
     console.error('[mtf-comparison] Error:', error);
-    res.json({
-      comparison: {
-        timeframes: [],
-        alignment_score: 0,
-        bullish_count: 0,
-        bearish_count: 0,
-        neutral_count: 0,
-      },
-      timestamp: new Date().toISOString(),
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 

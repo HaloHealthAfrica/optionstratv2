@@ -113,6 +113,12 @@ function validateSignal(signal) {
 /**
  * Save signal to database
  */
+function resolveRefactoredSource(signal) {
+  const source = (signal?.metadata?.source || 'TRADINGVIEW').toUpperCase();
+  const allowed = new Set(['TRADINGVIEW', 'GEX', 'MTF', 'MANUAL']);
+  return allowed.has(source) ? source : 'MANUAL';
+}
+
 async function saveSignal(signal, requestId, rawPayload, signatureVerified, signalHash) {
   const client = await getClient();
   
@@ -148,6 +154,39 @@ async function saveSignal(signal, requestId, rawPayload, signatureVerified, sign
         signal.quantity || null,
         signal.strategy_type || null,
         'PENDING',
+      ]
+    );
+
+    const refactoredMetadata = {
+      ...(signal.metadata || {}),
+      request_id: requestId,
+      signal_hash: signalHash,
+      signature_valid: signatureVerified,
+      raw_payload: rawPayload,
+    };
+
+    await client.query(
+      `INSERT INTO refactored_signals (
+        id,
+        source,
+        symbol,
+        direction,
+        timeframe,
+        timestamp,
+        metadata,
+        validation_result,
+        created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      ON CONFLICT (id) DO NOTHING`,
+      [
+        result.rows[0].id,
+        resolveRefactoredSource(signal),
+        signal.underlying,
+        signal.option_type,
+        signal.metadata?.timeframe || '5m',
+        signal.metadata?.timestamp || new Date().toISOString(),
+        JSON.stringify(refactoredMetadata),
+        null,
       ]
     );
 
