@@ -9,6 +9,9 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const { action } = req.query;
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({ error: 'JWT_SECRET is not set' });
+    }
 
     if (action === 'me') {
       const authHeader = req.headers.authorization;
@@ -45,6 +48,9 @@ router.post('/', async (req, res) => {
   try {
     const { action } = req.query;
     const { email, password } = req.body;
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({ error: 'JWT_SECRET is not set' });
+    }
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password required' });

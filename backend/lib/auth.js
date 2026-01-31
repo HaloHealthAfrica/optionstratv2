@@ -2,15 +2,23 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
+
+function requireJwtSecret() {
+  if (!JWT_SECRET) {
+    throw new Error('JWT_SECRET is not set');
+  }
+  return JWT_SECRET;
+}
 
 export function generateToken(user) {
+  const secret = requireJwtSecret();
   return jwt.sign(
     {
       sub: user.id,
       email: user.email,
     },
-    JWT_SECRET,
+    secret,
     {
       expiresIn: '7d',
     }
@@ -19,7 +27,7 @@ export function generateToken(user) {
 
 export function verifyToken(token) {
   try {
-    return jwt.verify(token, JWT_SECRET);
+    return jwt.verify(token, requireJwtSecret());
   } catch (error) {
     throw new Error('Invalid token');
   }

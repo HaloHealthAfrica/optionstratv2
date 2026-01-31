@@ -7,57 +7,59 @@ const router = express.Router();
 
 router.get('/', requireAuth, async (req, res) => {
   try {
-    // Get signal statistics
-    const signalStats = await query(`
-      SELECT 
-        COUNT(*) as total_signals,
-        COUNT(*) FILTER (WHERE status = 'EXECUTED') as executed_signals,
-        COUNT(*) FILTER (WHERE status = 'REJECTED') as rejected_signals,
-        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') as signals_24h
-      FROM signals
-    `);
+    const [signalsResult, ordersResult, tradesResult, positionsResult, violationsResult] = await Promise.all([
+      query('SELECT id, validation_result FROM refactored_signals'),
+      query('SELECT id, status, mode FROM orders'),
+      query('SELECT id FROM trades'),
+      query('SELECT id, status FROM refactored_positions'),
+      query('SELECT id, severity FROM risk_violations'),
+    ]);
 
-    // Get position statistics
-    const positionStats = await query(`
-      SELECT 
-        COUNT(*) as total_positions,
-        COUNT(*) FILTER (WHERE status = 'OPEN') as open_positions,
-        COUNT(*) FILTER (WHERE status = 'CLOSED') as closed_positions,
-        COALESCE(SUM(pnl) FILTER (WHERE status = 'CLOSED'), 0) as total_pnl
-      FROM positions
-    `);
+    const signals = signalsResult.rows || [];
+    const orders = ordersResult.rows || [];
+    const positions = positionsResult.rows || [];
+    const violations = violationsResult.rows || [];
 
-    // Get order statistics
-    const orderStats = await query(`
-      SELECT 
-        COUNT(*) as total_orders,
-        COUNT(*) FILTER (WHERE status = 'FILLED') as filled_orders,
-        COUNT(*) FILTER (WHERE status = 'PENDING') as pending_orders,
-        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') as orders_24h
-      FROM orders
-    `);
+    const acceptedSignals = signals.filter((s) => s.validation_result?.valid === true).length;
+    const rejectedSignals = signals.filter((s) => s.validation_result?.valid === false).length;
+    const pendingSignals = signals.filter((s) => !s.validation_result).length;
+    const failedSignals = signals.filter(
+      (s) => s.validation_result?.valid === false && s.validation_result?.stage === 'EXECUTION'
+    ).length;
 
-    // Get recent performance
-    const recentPerformance = await query(`
-      SELECT 
-        DATE(created_at) as date,
-        COUNT(*) as trades,
-        SUM(pnl) as daily_pnl
-      FROM positions
-      WHERE status = 'CLOSED'
-        AND created_at > NOW() - INTERVAL '30 days'
-      GROUP BY DATE(created_at)
-      ORDER BY date DESC
-      LIMIT 30
-    `);
-
-    res.json({
-      signals: signalStats.rows[0],
-      positions: positionStats.rows[0],
-      orders: orderStats.rows[0],
-      recent_performance: recentPerformance.rows,
+    const stats = {
+      signals: {
+        total: signals.length,
+        pending: pendingSignals,
+        completed: acceptedSignals,
+        rejected: rejectedSignals,
+        failed: failedSignals,
+      },
+      orders: {
+        total: orders.length,
+        paper: orders.filter((o) => o.mode === 'PAPER').length,
+        live: orders.filter((o) => o.mode === 'LIVE').length,
+        filled: orders.filter((o) => o.status === 'FILLED').length,
+        pending: orders.filter((o) => o.status === 'PENDING' || o.status === 'SUBMITTED').length,
+      },
+      trades: {
+        total: tradesResult.rows?.length || 0,
+      },
+      positions: {
+        total: positions.length,
+        open: positions.filter((p) => p.status === 'OPEN').length,
+        closed: positions.filter((p) => p.status === 'CLOSED').length,
+      },
+      risk_violations: {
+        total: violations.length,
+        critical: violations.filter((v) => v.severity === 'CRITICAL').length,
+        warning: violations.filter((v) => v.severity === 'WARNING').length,
+      },
+      mode: process.env.APP_MODE || 'PAPER',
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    res.json(stats);
   } catch (error) {
     console.error('[Stats] Error:', error);
     res.status(500).json({ error: error.message });

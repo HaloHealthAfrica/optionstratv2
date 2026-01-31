@@ -7,22 +7,43 @@ import { query, getClient } from '../lib/db.js';
 const router = express.Router();
 
 /**
+ * Normalize HMAC signature header values.
+ */
+function normalizeSignature(signature) {
+  if (!signature) return null;
+  const trimmed = signature.trim();
+  if (trimmed.startsWith('sha256=')) {
+    return trimmed.slice('sha256='.length);
+  }
+  return trimmed;
+}
+
+/**
  * Verify HMAC signature for webhook security
  */
-function verifyHmacSignature(payload, signature) {
+function verifyHmacSignature(rawBody, signature) {
   const secret = process.env.HMAC_SECRET;
-  if (!secret || !signature) {
+  const normalized = normalizeSignature(signature);
+  if (!secret || !rawBody || !normalized) {
     return false;
   }
 
   const hmac = crypto.createHmac('sha256', secret);
-  hmac.update(JSON.stringify(payload));
+  hmac.update(rawBody);
   const expectedSignature = hmac.digest('hex');
 
-  return crypto.timingSafeEqual(
-    Buffer.from(signature),
-    Buffer.from(expectedSignature)
-  );
+  if (expectedSignature.length !== normalized.length) {
+    return false;
+  }
+
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(normalized, 'hex'),
+      Buffer.from(expectedSignature, 'hex')
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -92,7 +113,7 @@ function validateSignal(signal) {
 /**
  * Save signal to database
  */
-async function saveSignal(signal, requestId) {
+async function saveSignal(signal, requestId, rawPayload, signatureVerified, signalHash) {
   const client = await getClient();
   
   try {
@@ -100,22 +121,33 @@ async function saveSignal(signal, requestId) {
 
     const result = await client.query(
       `INSERT INTO signals (
-        underlying, action, option_type, strike, expiration,
-        limit_price, timeframe, source, metadata, request_id, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        source,
+        signal_hash,
+        raw_payload,
+        signature_verified,
+        action,
+        underlying,
+        strike,
+        expiration,
+        option_type,
+        quantity,
+        strategy_type,
+        status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING id`,
       [
-        signal.underlying,
+        signal.metadata?.source || 'webhook',
+        signalHash,
+        rawPayload,
+        signatureVerified,
         signal.action,
-        signal.option_type,
+        signal.underlying,
         signal.strike,
         signal.expiration,
-        signal.limit_price,
-        signal.metadata?.timeframe || '5m',
-        signal.metadata?.source || 'webhook',
-        JSON.stringify(signal.metadata),
-        requestId,
-        'RECEIVED',
+        signal.option_type,
+        signal.quantity || null,
+        signal.strategy_type || null,
+        'PENDING',
       ]
     );
 
@@ -142,24 +174,30 @@ router.post('/', async (req, res) => {
     // Verify HMAC signature if secret is configured
     const signature = req.headers['x-webhook-signature'];
     const hmacSecret = process.env.HMAC_SECRET;
+    const rawBody = req.rawBody || null;
     
     if (hmacSecret) {
       console.log(`[${requestId}] Stage: HMAC_VERIFICATION, Status: CHECKING`);
-      
-      if (!signature) {
-        console.log(`[${requestId}] Stage: HMAC_VERIFICATION, Status: SKIPPED, Reason: No signature provided`);
-      } else {
-        const isValid = verifyHmacSignature(req.body, signature);
-        if (!isValid) {
-          console.log(`[${requestId}] Stage: HMAC_VERIFICATION, Status: FAILED`);
-          return res.status(401).json({
-            status: 'REJECTED',
-            error: 'Invalid HMAC signature',
-            request_id: requestId,
-          });
-        }
-        console.log(`[${requestId}] Stage: HMAC_VERIFICATION, Status: SUCCESS`);
+
+      if (!rawBody || !signature) {
+        console.log(`[${requestId}] Stage: HMAC_VERIFICATION, Status: FAILED, Reason: Missing signature or raw body`);
+        return res.status(401).json({
+          status: 'REJECTED',
+          error: 'Missing HMAC signature',
+          request_id: requestId,
+        });
       }
+
+      const isValid = verifyHmacSignature(rawBody, signature);
+      if (!isValid) {
+        console.log(`[${requestId}] Stage: HMAC_VERIFICATION, Status: FAILED`);
+        return res.status(401).json({
+          status: 'REJECTED',
+          error: 'Invalid HMAC signature',
+          request_id: requestId,
+        });
+      }
+      console.log(`[${requestId}] Stage: HMAC_VERIFICATION, Status: SUCCESS`);
     }
 
     // Parse payload
@@ -193,7 +231,7 @@ router.post('/', async (req, res) => {
 
     const duplicateCheck = await query(
       `SELECT id FROM signals 
-       WHERE metadata->>'signal_hash' = $1 
+       WHERE signal_hash = $1 
        AND created_at > NOW() - INTERVAL '5 minutes'
        LIMIT 1`,
       [signalHash]
@@ -212,12 +250,8 @@ router.post('/', async (req, res) => {
     console.log(`[${requestId}] Stage: DEDUPLICATION, Status: UNIQUE`);
 
     // Save signal
-    signal.metadata = signal.metadata || {};
-    signal.metadata.signal_hash = signalHash;
-    signal.metadata.request_id = requestId;
-
     console.log(`[${requestId}] Stage: PERSISTENCE, Status: SAVING`);
-    const signalId = await saveSignal(signal, requestId);
+    const signalId = await saveSignal(signal, requestId, req.body, Boolean(hmacSecret), signalHash);
     console.log(`[${requestId}] Stage: PERSISTENCE, Status: SUCCESS, SignalId: ${signalId}`);
 
     const duration = Date.now() - startTime;
