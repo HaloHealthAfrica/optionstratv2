@@ -84,36 +84,59 @@ if (exitWorkerEnabled) {
 
 type EdgeHandler = (req: Request) => Response | Promise<Response>;
 
-async function loadEdgeHandler(functionName: keyof typeof functions): Promise<EdgeHandler | null> {
-  let capturedHandler: EdgeHandler | null = null;
-  const denoAny = Deno as unknown as { serve?: (...args: unknown[]) => unknown };
-  const originalServe = denoAny.serve;
+// Global handler registry - functions will register themselves here
+const handlerRegistry = new Map<string, EdgeHandler>();
 
-  if (originalServe) {
-    denoAny.serve = ((optionsOrHandler: unknown, maybeHandler?: unknown) => {
-      const handler = typeof optionsOrHandler === "function"
-        ? (optionsOrHandler as EdgeHandler)
-        : (maybeHandler as EdgeHandler | undefined);
-      if (handler) {
-        capturedHandler = handler;
-      }
-      return {
-        listen: () => {},
-        close: () => {},
-        finished: Promise.resolve(),
-      };
-    }) as typeof originalServe;
-  }
-
-  try {
-    const module = await functions[functionName]();
-    // Prioritize captured handler (from Deno.serve) over default export
-    const handler = capturedHandler ?? (module.default as EdgeHandler | undefined);
-    return handler ?? null;
-  } finally {
-    if (originalServe) {
-      denoAny.serve = originalServe;
+// Override Deno.serve globally before any imports
+const originalDenoServe = Deno.serve;
+(Deno as any).serve = (optionsOrHandler: any, maybeHandler?: any) => {
+  const handler = typeof optionsOrHandler === "function" 
+    ? optionsOrHandler 
+    : maybeHandler;
+  
+  if (handler) {
+    // Get the function name from the call stack
+    const stack = new Error().stack || "";
+    const match = stack.match(/\/functions\/([^\/]+)\/index\.ts/);
+    if (match) {
+      const functionName = match[1];
+      handlerRegistry.set(functionName, handler);
+      console.log(`[Registry] Registered handler for: ${functionName}`);
     }
+  }
+  
+  // Return a mock server object
+  return {
+    finished: Promise.resolve(),
+    shutdown: () => Promise.resolve(),
+    ref: () => {},
+    unref: () => {},
+  };
+};
+
+async function loadEdgeHandler(functionName: keyof typeof functions): Promise<EdgeHandler | null> {
+  try {
+    // Import the module (this will trigger Deno.serve and register the handler)
+    const module = await functions[functionName]();
+    
+    // Check registry first (for Deno.serve functions)
+    const registeredHandler = handlerRegistry.get(functionName);
+    if (registeredHandler) {
+      console.log(`[${functionName}] Using registered handler`);
+      return registeredHandler;
+    }
+    
+    // Fall back to default export
+    if (module.default) {
+      console.log(`[${functionName}] Using default export`);
+      return module.default as EdgeHandler;
+    }
+    
+    console.error(`[${functionName}] No handler found in registry or default export`);
+    return null;
+  } catch (error) {
+    console.error(`[${functionName}] Error loading handler:`, error);
+    return null;
   }
 }
 

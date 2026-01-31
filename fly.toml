@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for optionstratv2 on 2026-01-29T22:52:20Z
+# fly.toml app configuration file generated for optionstratv2 on 2026-01-30T22:52:20Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -7,6 +7,7 @@ app = 'optionstratv2'
 primary_region = 'iad'
 
 [build]
+  dockerfile = "Dockerfile.nodejs"
 
 [http_service]
   internal_port = 8080

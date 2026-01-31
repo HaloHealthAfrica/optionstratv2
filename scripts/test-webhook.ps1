@@ -2,7 +2,7 @@
 # Sends a test webhook to your backend to verify it's working
 
 param(
-    [string]$Url = "https://optionstrat-backend.fly.dev/webhook"
+    [string]$Url = "https://optionstratv2.fly.dev/webhook"
 )
 
 Write-Host "`n🧪 Testing Webhook Endpoint" -ForegroundColor Cyan
