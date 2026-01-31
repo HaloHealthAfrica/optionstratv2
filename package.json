@@ -10,6 +10,7 @@
     "build:dev": "vite build --mode development",
     "build:server": "echo 'No build needed for Node.js server'",
     "start:server": "node backend/server.js",
+    "seed:demo": "node scripts/seed-demo-data.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",

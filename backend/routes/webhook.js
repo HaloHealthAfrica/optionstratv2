@@ -50,7 +50,10 @@ function verifyHmacSignature(rawBody, signature) {
  * Generate unique hash for signal deduplication
  */
 function generateSignalHash(signal) {
-  const key = `${signal.symbol}-${signal.direction}-${signal.action}-${signal.timeframe}`;
+  const symbol = signal.symbol || signal.underlying || 'UNKNOWN';
+  const direction = signal.direction || signal.option_type || 'UNKNOWN';
+  const timeframe = signal.timeframe || signal.metadata?.timeframe || 'UNKNOWN';
+  const key = `${symbol}-${direction}-${signal.action}-${timeframe}`;
   return crypto.createHash('sha256').update(key).digest('hex');
 }
 
@@ -62,8 +65,12 @@ function parseTradingViewPayload(payload) {
   const symbol = payload.ticker || payload.symbol || 'SPY';
   const action = (payload.action || payload.order || 'BUY').toUpperCase();
   const direction = (payload.direction || payload.option_type || 'CALL').toUpperCase();
+  const timeframe = payload.timeframe || payload.interval || '5m';
   
   return {
+    symbol,
+    direction,
+    timeframe,
     underlying: symbol,
     action,
     option_type: direction,
@@ -73,7 +80,7 @@ function parseTradingViewPayload(payload) {
     metadata: {
       source: 'tradingview',
       raw_payload: payload,
-      timeframe: payload.timeframe || payload.interval || '5m',
+      timeframe,
       timestamp: payload.timestamp || new Date().toISOString(),
     },
   };
@@ -183,7 +190,7 @@ async function saveSignal(signal, requestId, rawPayload, signatureVerified, sign
         resolveRefactoredSource(signal),
         signal.underlying,
         signal.option_type,
-        signal.metadata?.timeframe || '5m',
+        signal.timeframe || signal.metadata?.timeframe || '5m',
         signal.metadata?.timestamp || new Date().toISOString(),
         JSON.stringify(refactoredMetadata),
         null,
