@@ -156,7 +156,7 @@ async function createOrderFromSignal(signal) {
     // Update signal status
     await client.query(`
       UPDATE signals
-      SET status = 'ORDER_CREATED', updated_at = NOW()
+      SET status = 'ORDER_CREATED'
       WHERE id = $1
     `, [signal.id]);
     

@@ -93,8 +93,7 @@ async function refreshPosition(position) {
       UPDATE refactored_positions
       SET 
         current_price = $1,
-        unrealized_pnl = $2,
-        updated_at = NOW()
+        unrealized_pnl = $2
       WHERE id = $3
     `, [currentPrice, unrealizedPnl, position.id]);
     

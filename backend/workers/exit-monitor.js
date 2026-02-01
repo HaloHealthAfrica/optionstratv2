@@ -9,7 +9,6 @@ async function getExitRules() {
   try {
     const result = await query(`
       SELECT * FROM exit_rules
-      WHERE enabled = true
       ORDER BY created_at DESC
       LIMIT 1
     `);
@@ -27,7 +26,7 @@ async function getExitRules() {
     
     return result.rows[0];
   } catch (error) {
-    console.error('[Exit Monitor] Error fetching exit rules:', error);
+    console.error('[Exit Monitor] Error fetching exit rules:', error.message);
     // Return default rules on error
     return {
       profit_target_percent: 50,

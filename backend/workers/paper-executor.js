@@ -79,8 +79,7 @@ async function executePaperTrade(order) {
       SET 
         status = 'FILLED',
         filled_quantity = quantity,
-        avg_fill_price = $1,
-        updated_at = NOW()
+        avg_fill_price = $1
       WHERE id = $2
     `, [avgFillPrice, order.id]);
     
@@ -128,9 +127,8 @@ async function executePaperTrade(order) {
           current_price,
           unrealized_pnl,
           status,
-          created_at,
-          updated_at
-        ) VALUES ($1, $2, $3, $4, $5, NOW(), $6, 0, 'OPEN', NOW(), NOW())
+          created_at
+        ) VALUES ($1, $2, $3, $4, $5, NOW(), $6, 0, 'OPEN', NOW())
       `, [
         order.signal_id,
         order.underlying,
@@ -157,8 +155,7 @@ async function executePaperTrade(order) {
             status = 'CLOSED',
             exit_price = $1,
             exit_time = NOW(),
-            realized_pnl = $2,
-            updated_at = NOW()
+            realized_pnl = $2
           WHERE id = $3
         `, [avgFillPrice, realizedPnl, position.id]);
       }
@@ -167,7 +164,7 @@ async function executePaperTrade(order) {
     // Update signal status
     await client.query(`
       UPDATE signals
-      SET status = 'EXECUTED', updated_at = NOW()
+      SET status = 'EXECUTED'
       WHERE id = $1
     `, [order.signal_id]);
     
