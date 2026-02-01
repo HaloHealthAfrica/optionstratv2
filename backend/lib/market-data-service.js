@@ -6,11 +6,11 @@ import rateLimiterManager from './rate-limiter.js';
 
 class MarketDataService {
   constructor() {
-    this.provider = process.env.MARKET_DATA_PROVIDER || 'twelvedata';
+    this.provider = process.env.MARKET_DATA_PROVIDER || 'alpaca';
     this.polygonApiKey = process.env.POLYGON_API_KEY;
     this.alphaVantageApiKey = process.env.ALPHA_VANTAGE_API_KEY;
-    this.twelveDataApiKey = process.env.TWELVE_DATA_API_KEY;
-    this.marketDataApiKey = process.env.MARKET_DATA_API_KEY;
+    this.twelveDataApiKey = process.env.TWELVE_DATA_API_KEY || process.env.TWELVEDATA_API_KEY;
+    this.marketDataApiKey = process.env.MARKET_DATA_API_KEY || process.env.MARKETDATA_API_KEY;
     this.alpacaApiKey = process.env.ALPACA_API_KEY;
     this.alpacaSecretKey = process.env.ALPACA_SECRET_KEY;
     this.alpacaPaper = process.env.ALPACA_PAPER !== 'false'; // Default to paper trading
