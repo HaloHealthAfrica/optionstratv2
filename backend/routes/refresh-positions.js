@@ -1,20 +1,22 @@
 // Refresh positions endpoint
 import express from 'express';
-import { requireAuth } from '../lib/auth.js';
-import { query } from '../lib/db.js';
+import { refreshOpenPositions } from '../workers/position-refresher.js';
 
 const router = express.Router();
 
-router.get('/', requireAuth, async (req, res) => {
+// POST /refresh-positions - Manually trigger position refresh
+router.post('/', async (req, res) => {
   try {
-    // TODO: Implement refresh-positions logic
-    res.status(501).json({ error: 'Not implemented yet' });
+    const result = await refreshOpenPositions();
+    res.json({
+      success: true,
+      ...result,
+      message: `Refreshed ${result.refreshed} positions`,
+    });
   } catch (error) {
     console.error('[refresh-positions] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
-
-
 
 export default router;

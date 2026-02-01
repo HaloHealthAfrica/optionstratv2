@@ -1,20 +1,22 @@
 // Paper trading endpoint
 import express from 'express';
-import { requireAuth } from '../lib/auth.js';
-import { query } from '../lib/db.js';
+import { executePendingPaperOrders } from '../workers/paper-executor.js';
 
 const router = express.Router();
 
-router.get('/', requireAuth, async (req, res) => {
+// POST /paper-trading - Manually trigger paper execution
+router.post('/', async (req, res) => {
   try {
-    // TODO: Implement paper-trading logic
-    res.status(501).json({ error: 'Not implemented yet' });
+    const result = await executePendingPaperOrders();
+    res.json({
+      success: true,
+      ...result,
+      message: `Executed ${result.executed} paper orders`,
+    });
   } catch (error) {
     console.error('[paper-trading] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
-
-
 
 export default router;

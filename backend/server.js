@@ -30,6 +30,7 @@ import refreshGexSignalsRouter from './routes/refresh-gex-signals.js';
 import refreshPositionsRouter from './routes/refresh-positions.js';
 import refactoredExitWorkerRouter from './routes/refactored-exit-worker.js';
 import tradesRouter from './routes/trades.js';
+import { startAllWorkers, stopAllWorkers } from './workers/index.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '8080');
@@ -123,15 +124,21 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Optionstrat Backend Server (Node.js) starting on port ${PORT}`);
   console.log(`📦 Available endpoints: health, auth, signals, orders, positions, stats, webhook, analytics, exit-signals, exit-rules, risk-limits, risk-violations, market-positioning, metrics, monitor-positions, mtf-analysis, mtf-comparison, paper-trading, poll-orders, refresh-gex-signals, refresh-positions, refactored-exit-worker, trades`);
   console.log(`✅ Server ready at http://0.0.0.0:${PORT}`);
+  
+  // Start background workers
+  console.log('');
+  startAllWorkers();
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
+  stopAllWorkers();
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down gracefully');
+  stopAllWorkers();
   process.exit(0);
 });
