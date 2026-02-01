@@ -1,17 +1,18 @@
 // Paper Trading Executor
 // Simulates order fills for paper trading mode
 import { query, getClient } from '../lib/db.js';
+import marketDataService from '../lib/market-data-service.js';
 
 /**
- * Get current option price (simulated)
+ * Get current option price
+ * Uses real underlying price from market data service
  */
 async function getOptionPrice(underlying, strike, optionType, expiration) {
-  // TODO: Integrate real options pricing model (Black-Scholes, etc.)
-  // For now, use simple simulation based on underlying price
+  // Fetch real underlying price
+  const underlyingData = await marketDataService.getStockPrice(underlying);
+  const underlyingPrice = underlyingData.price;
   
-  const underlyingPrice = await getUnderlyingPrice(underlying);
-  
-  // Simple intrinsic value + time value simulation
+  // Calculate intrinsic value
   let intrinsicValue = 0;
   if (optionType === 'CALL') {
     intrinsicValue = Math.max(0, underlyingPrice - strike);
@@ -24,7 +25,7 @@ async function getOptionPrice(underlying, strike, optionType, expiration) {
   const today = new Date();
   const daysToExpiration = Math.max(0, Math.ceil((expirationDate - today) / (1000 * 60 * 60 * 24)));
   
-  // Simple time value: $0.10 per day to expiration (very rough approximation)
+  // Simple time value: $0.10 per day to expiration (will be replaced with real options pricing in Phase 2)
   const timeValue = daysToExpiration * 0.10;
   
   // Option price = intrinsic value + time value
@@ -35,19 +36,11 @@ async function getOptionPrice(underlying, strike, optionType, expiration) {
 }
 
 /**
- * Get underlying price (simulated)
+ * Get underlying price (deprecated - use marketDataService directly)
  */
 async function getUnderlyingPrice(symbol) {
-  // TODO: Integrate real market data provider
-  const demoPrices = {
-    'SPY': 502.15,
-    'QQQ': 438.20,
-    'AAPL': 190.50,
-    'TSLA': 245.30,
-    'MSFT': 420.80,
-  };
-  
-  return demoPrices[symbol] || 100.00;
+  const priceData = await marketDataService.getStockPrice(symbol);
+  return priceData.price;
 }
 
 /**

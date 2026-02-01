@@ -2,6 +2,7 @@
 // Creates orders from approved signals
 import { query, getClient } from '../lib/db.js';
 import crypto from 'crypto';
+import marketDataService from '../lib/market-data-service.js';
 
 /**
  * Calculate strike price for an option
@@ -69,19 +70,26 @@ async function calculatePositionSize(signal) {
 
 /**
  * Get current price for a symbol
+ * Uses real market data service
  */
 async function getCurrentPrice(symbol) {
-  // TODO: Integrate real market data provider
-  // For now, return demo prices
-  const demoPrices = {
-    'SPY': 502.15,
-    'QQQ': 438.20,
-    'AAPL': 190.50,
-    'TSLA': 245.30,
-    'MSFT': 420.80,
-  };
-  
-  return demoPrices[symbol] || 100.00;
+  try {
+    const priceData = await marketDataService.getStockPrice(symbol);
+    return priceData.price;
+  } catch (error) {
+    console.error(`[Order Creator] Error fetching price for ${symbol}:`, error.message);
+    
+    // Fallback to demo prices
+    const demoPrices = {
+      'SPY': 502.15,
+      'QQQ': 438.20,
+      'AAPL': 190.50,
+      'TSLA': 245.30,
+      'MSFT': 420.80,
+    };
+    
+    return demoPrices[symbol] || 100.00;
+  }
 }
 
 /**

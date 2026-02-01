@@ -1,24 +1,39 @@
 // Signal Processor Worker
 // Processes pending signals and applies decision logic
 import { query, getClient } from '../lib/db.js';
+import marketDataService from '../lib/market-data-service.js';
 
 /**
  * Fetch market context for a symbol
+ * Uses real market data service
  */
 async function fetchMarketContext(symbol) {
   try {
-    // For now, return basic context
-    // TODO: Integrate real market data provider
+    // Get market hours
+    const marketHours = await marketDataService.getMarketHours();
+    
+    // Get VIX (will be replaced with real VIX in Phase 4)
+    // For now, return basic context with real market hours
+    return {
+      vix_regime: 'LOW_VOL', // Will be calculated from real VIX in Phase 4
+      market_bias: 'NEUTRAL', // Will be calculated from SPY trend in Phase 4
+      or_breakout: 'INSIDE', // Will be detected in Phase 4
+      spy_trend: 'NEUTRAL', // Will be calculated in Phase 4
+      is_market_open: marketHours.is_market_open,
+      minutes_since_open: marketHours.minutes_since_open,
+      minutes_until_close: marketHours.minutes_until_close,
+    };
+  } catch (error) {
+    console.error('[Signal Processor] Error fetching market context:', error);
     return {
       vix_regime: 'LOW_VOL',
       market_bias: 'NEUTRAL',
       or_breakout: 'INSIDE',
       spy_trend: 'NEUTRAL',
       is_market_open: true,
+      minutes_since_open: 0,
+      minutes_until_close: 0,
     };
-  } catch (error) {
-    console.error('[Signal Processor] Error fetching market context:', error);
-    return null;
   }
 }
 

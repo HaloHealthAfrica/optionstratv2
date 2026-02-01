@@ -1,17 +1,18 @@
 // Position Refresher
 // Updates current prices and unrealized PnL for open positions
 import { query, getClient } from '../lib/db.js';
+import marketDataService from '../lib/market-data-service.js';
 
 /**
- * Get current option price (simulated)
+ * Get current option price
+ * Uses real underlying price from market data service
  */
 async function getOptionPrice(underlying, strike, optionType, expiration) {
-  // TODO: Integrate real options pricing model
-  // For now, use simple simulation
+  // Fetch real underlying price
+  const underlyingData = await marketDataService.getStockPrice(underlying);
+  const underlyingPrice = underlyingData.price;
   
-  const underlyingPrice = await getUnderlyingPrice(underlying);
-  
-  // Simple intrinsic value + time value simulation
+  // Calculate intrinsic value
   let intrinsicValue = 0;
   if (optionType === 'CALL') {
     intrinsicValue = Math.max(0, underlyingPrice - strike);
@@ -24,7 +25,7 @@ async function getOptionPrice(underlying, strike, optionType, expiration) {
   const today = new Date();
   const daysToExpiration = Math.max(0, Math.ceil((expirationDate - today) / (1000 * 60 * 60 * 24)));
   
-  // Simple time value
+  // Simple time value (will be replaced with real options pricing in Phase 2)
   const timeValue = daysToExpiration * 0.10;
   
   // Option price = intrinsic value + time value
@@ -32,27 +33,6 @@ async function getOptionPrice(underlying, strike, optionType, expiration) {
   
   // Minimum price of $0.05
   return Math.max(0.05, optionPrice);
-}
-
-/**
- * Get underlying price (simulated with some randomness)
- */
-async function getUnderlyingPrice(symbol) {
-  // TODO: Integrate real market data provider
-  const basePrices = {
-    'SPY': 502.15,
-    'QQQ': 438.20,
-    'AAPL': 190.50,
-    'TSLA': 245.30,
-    'MSFT': 420.80,
-  };
-  
-  const basePrice = basePrices[symbol] || 100.00;
-  
-  // Add some randomness (±0.5%)
-  const randomness = 1 + (Math.random() * 0.01 - 0.005);
-  
-  return basePrice * randomness;
 }
 
 /**

@@ -30,6 +30,7 @@ import refreshGexSignalsRouter from './routes/refresh-gex-signals.js';
 import refreshPositionsRouter from './routes/refresh-positions.js';
 import refactoredExitWorkerRouter from './routes/refactored-exit-worker.js';
 import tradesRouter from './routes/trades.js';
+import marketDataStatusRouter from './routes/market-data-status.js';
 import { startAllWorkers, stopAllWorkers } from './workers/index.js';
 
 const app = express();
@@ -89,6 +90,7 @@ app.use('/refresh-gex-signals', refreshGexSignalsRouter);
 app.use('/refresh-positions', refreshPositionsRouter);
 app.use('/refactored-exit-worker', refactoredExitWorkerRouter);
 app.use('/trades', tradesRouter);
+app.use('/market-data-status', marketDataStatusRouter);
 
 // Root endpoint redirects to health
 app.get('/', (req, res) => {
@@ -103,9 +105,9 @@ app.use((req, res) => {
     available: [
       'health', 'auth', 'signals', 'orders', 'positions', 'stats', 'webhook',
       'analytics', 'exit-signals', 'exit-rules', 'risk-limits', 'risk-violations',
-      'market-positioning', 'metrics', 'monitor-positions', 'mtf-analysis', 'mtf-comparison',
-      'paper-trading', 'poll-orders', 'refresh-gex-signals', 'refresh-positions',
-      'refactored-exit-worker', 'trades'
+      'market-positioning', 'market-data-status', 'metrics', 'monitor-positions', 
+      'mtf-analysis', 'mtf-comparison', 'paper-trading', 'poll-orders', 
+      'refresh-gex-signals', 'refresh-positions', 'refactored-exit-worker', 'trades'
     ],
   });
 });
